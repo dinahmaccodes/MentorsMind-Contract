@@ -722,6 +722,67 @@ impl EscrowContract {
         Self::_is_token_approved(&env, &token_address)
     }
 
+    /// Get all escrows for a specific mentor.
+    ///
+    /// Iterates through all escrows and returns those where the mentor matches.
+    /// This is a query function with no authorization requirements.
+    pub fn get_escrows_by_mentor(env: Env, mentor: Address) -> Vec<Escrow> {
+        let count = env.storage().persistent().get(&ESCROW_COUNT).unwrap_or(0u64);
+        let mut result = Vec::new(&env);
+
+        for i in 1..=count {
+            let key = (symbol_short!("ESCROW"), i);
+            if let Some(escrow) = env.storage().persistent().get::<_, Escrow>(&key) {
+                if escrow.mentor == mentor {
+                    result.push_back(escrow);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Submit a review for a completed escrow (learner only).
+    ///
+    /// Records a review reason on the escrow after funds have been released.
+    /// This is a lightweight operation that stores the review reason.
+    /// In production, this would trigger a cross-contract call to the verification contract.
+    pub fn submit_review(env: Env, caller: Address, escrow_id: u64, reason: Symbol) {
+        let key = (symbol_short!("ESCROW"), escrow_id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Escrow not found");
+
+        // Only learner can submit review
+        caller.require_auth();
+        if caller != escrow.learner {
+            panic!("Only learner can submit review");
+        }
+
+        // Can only review released escrows
+        if escrow.status != EscrowStatus::Released {
+            panic!("Can only review released escrows");
+        }
+
+        // Store review reason in a separate key
+        let review_key = (symbol_short!("REVIEW"), escrow_id);
+        env.storage().persistent().set(&review_key, &reason);
+        env.storage()
+            .persistent()
+            .extend_ttl(&review_key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        env.events().publish(
+            (symbol_short!("review"), escrow_id),
+            (escrow_id, caller, reason, escrow.mentor),
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
