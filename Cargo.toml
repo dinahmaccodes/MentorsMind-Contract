@@ -4,6 +4,7 @@ members = [
     "contracts/verification",
     "contracts/mnt-token",
     "tests",
+    "contracts/referral",
     # "multisig",
     # "payment-router",
 ]
