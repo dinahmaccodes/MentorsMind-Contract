@@ -78,6 +78,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
@@ -140,6 +143,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
@@ -615,6 +621,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "sessions_completed"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "status"
                       },
                       "val": {
@@ -631,6 +645,14 @@
                       },
                       "val": {
                         "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "total_sessions"
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     },
                     {
@@ -824,6 +846,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "sessions_completed"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "status"
                       },
                       "val": {
@@ -840,6 +870,14 @@
                       },
                       "val": {
                         "address": "CACMVW2KK4H5FZDFF2AUCAKQTEJMZZWJUIZF23XMRVYQBSXYLHZ6BKWN"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "total_sessions"
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     },
                     {
@@ -1681,6 +1719,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
@@ -1935,6 +1976,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
@@ -2010,7 +2054,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'Session ID already exists' from contract function 'Symbol(obj#301)'"
+                  "string": "caught panic 'Session ID already exists' from contract function 'Symbol(obj#305)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -2032,6 +2076,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
@@ -2112,6 +2159,9 @@
                     },
                     {
                       "u64": 0
+                    },
+                    {
+                      "u32": 1
                     }
                   ]
                 }
@@ -2187,6 +2237,9 @@
                 },
                 {
                   "u64": 0
+                },
+                {
+                  "u32": 1
                 }
               ]
             }
