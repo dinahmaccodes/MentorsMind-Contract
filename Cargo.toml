@@ -5,6 +5,7 @@ members = [
     "contracts/verification",
     "contracts/oracle",
     "contracts/timelock",
+    "contracts/vesting",
     "tests",
 ]
 
