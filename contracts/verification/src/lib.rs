@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -41,10 +41,10 @@ impl VerificationContract {
     /// Panics if:
     /// - Contract is already initialized
     pub fn initialize(env: Env, admin: Address) {
-        if env.storage().persistent().has(&ADMIN) {
+        if env.storage().persistent().has(&DataKey::Admin) {
             panic!("Already initialized");
         }
-        env.storage().persistent().set(&ADMIN, &admin);
+        env.storage().persistent().set(&DataKey::Admin, &admin);
     }
 
     /// Verify a mentor with credentials (admin only).
@@ -60,7 +60,7 @@ impl VerificationContract {
         let admin: Address = env
             .storage()
             .persistent()
-            .get(&ADMIN)
+            .get(&DataKey::Admin)
             .expect("Not initialized");
         admin.require_auth();
         let now = env.ledger().timestamp();
@@ -70,9 +70,9 @@ impl VerificationContract {
             expiry,
             is_active: true,
         };
-        let key = (VER_KEY, mentor.clone());
+        let key = DataKey::Verification(mentor.clone());
         env.storage().persistent().set(&key, &rec);
-        let tkey = (TIER_KEY, mentor.clone());
+        let tkey = DataKey::Tier(mentor.clone());
         if !env.storage().persistent().has(&tkey) {
             env.storage().persistent().set(&tkey, &0i32);
         }
@@ -100,10 +100,10 @@ impl VerificationContract {
         let admin: Address = env
             .storage()
             .persistent()
-            .get(&ADMIN)
+            .get(&DataKey::Admin)
             .expect("Not initialized");
         admin.require_auth();
-        let key = (VER_KEY, mentor.clone());
+        let key = DataKey::Verification(mentor.clone());
         let mut rec: VerificationRecord = env
             .storage()
             .persistent()
@@ -118,7 +118,7 @@ impl VerificationContract {
     }
 
     pub fn is_verified(env: Env, mentor: Address) -> bool {
-        let key = (VER_KEY, mentor);
+        let key = DataKey::Verification(mentor);
         let rec: Option<VerificationRecord> = env.storage().persistent().get(&key);
         match rec {
             None => false,
@@ -127,7 +127,7 @@ impl VerificationContract {
     }
 
     pub fn get_verification(env: Env, mentor: Address) -> VerificationRecord {
-        let key = (VER_KEY, mentor);
+        let key = DataKey::Verification(mentor);
         env.storage()
             .persistent()
             .get(&key)

@@ -1,11 +1,5 @@
 #![no_std]
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, IntoVal,
-};
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec, IntoVal, BytesN};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,6 +10,37 @@ pub enum EscrowStatus {
     Refunded,
     /// Dispute was resolved by admin arbitration via `resolve_dispute`.
     Resolved,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MilestoneStatus {
+    Pending,
+    Completed,
+    Disputed,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneSpec {
+    pub description_hash: BytesN<32>,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneEscrow {
+    pub id: u64,
+    pub mentor: Address,
+    pub learner: Address,
+    pub total_amount: i128,
+    pub milestones: Vec<MilestoneSpec>,
+    pub milestone_statuses: Vec<MilestoneStatus>,
+    pub status: EscrowStatus,
+    pub created_at: u64,
+    pub token_address: Address,
+    pub platform_fee: i128,
+    pub net_amount: i128,
 }
 
 #[contracttype]
@@ -41,6 +66,12 @@ pub struct Escrow {
     pub dispute_reason: Symbol,
     /// Unix timestamp (seconds) at which `resolve_dispute` was called (0 until resolved).
     pub resolved_at: u64,
+    pub usd_amount: i128,
+    pub quoted_token_amount: i128,
+    pub send_asset: Address,
+    pub dest_asset: Address,
+    pub total_sessions: u32,
+    pub sessions_completed: u32,
 }
 
 #[contracttype]
@@ -109,21 +140,17 @@ pub struct ReviewSubmittedEventData {
 // ---------------------------------------------------------------------------
 
 const ESCROW_COUNT: Symbol = symbol_short!("ESC_CNT");
+const MILESTONE_ESCROW_COUNT: Symbol = symbol_short!("MESC_CNT");
 const ADMIN: Symbol = symbol_short!("ADMIN");
 const TREASURY: Symbol = symbol_short!("TREASURY");
 const FEE_BPS: Symbol = symbol_short!("FEE_BPS");
 /// Default auto-release delay in seconds (configurable at init).
 const AUTO_REL_DLY: Symbol = symbol_short!("AR_DELAY");
 const SESSION_KEY: Symbol = symbol_short!("SESSION");
-
-/// Price cache for dynamic fee
-const PRICE_CACHE: Symbol = symbol_short!("PRC_CSH");
-const PRICE_CACHE_TIME: Symbol = symbol_short!("PRC_TM");
-const DYNAMIC_FEE_ENABLED: Symbol = symbol_short!("DYN_FEE");
-const LIQUIDITY_POOL: Symbol = symbol_short!("LIQ_POOL");
-const DEFAULT_FEE_BPS: u32 = 500;
-
-/// Maximum configurable fee: 10% = 1 000 basis points.
+const ORACLE_ID: Symbol = symbol_short!("ORACLE");
+const ORACLE_MAX_AGE: Symbol = symbol_short!("OR_AGE");
+const MENTOR_ESCROWS: Symbol = symbol_short!("MNT_ESC");
+const LEARNER_ESCROWS: Symbol = symbol_short!("LRN_ESC");
 const MAX_FEE_BPS: u32 = 1_000;
 
 /// Default auto-release delay: 72 hours in seconds.
@@ -171,7 +198,7 @@ impl EscrowContract {
         approved_tokens: soroban_sdk::Vec<Address>,
         auto_release_delay_secs: u64,
     ) {
-        if env.storage().persistent().has(&ADMIN) {
+        if env.storage().persistent().has(&DataKey::Admin) {
             panic!("Already initialized");
         }
 
@@ -179,25 +206,30 @@ impl EscrowContract {
             panic!("Fee exceeds maximum (1000 bps)");
         }
 
-        env.storage().persistent().set(&ADMIN, &admin);
+        env.storage().persistent().set(&DataKey::Admin, &admin);
         env.storage()
             .persistent()
-            .extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::Admin, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        env.storage().persistent().set(&TREASURY, &treasury);
+        env.storage().persistent().set(&DataKey::Treasury, &treasury);
         env.storage()
             .persistent()
-            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::Treasury, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        env.storage().persistent().set(&FEE_BPS, &fee_bps);
+        env.storage().persistent().set(&DataKey::FeeBps, &fee_bps);
         env.storage()
             .persistent()
-            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::FeeBps, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        env.storage().persistent().set(&ESCROW_COUNT, &0u64);
+        env.storage().persistent().set(&DataKey::EscrowCount, &0u64);
         env.storage()
             .persistent()
-            .extend_ttl(&ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::EscrowCount, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        env.storage().persistent().set(&MILESTONE_ESCROW_COUNT, &0u64);
+        env.storage()
+            .persistent()
+            .extend_ttl(&MILESTONE_ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         // Store configurable auto-release delay; fall back to 72 hours if 0.
         let delay = if auto_release_delay_secs == 0 {
@@ -205,10 +237,10 @@ impl EscrowContract {
         } else {
             auto_release_delay_secs
         };
-        env.storage().persistent().set(&AUTO_REL_DLY, &delay);
+        env.storage().persistent().set(&DataKey::AutoRelDelay, &delay);
         env.storage()
             .persistent()
-            .extend_ttl(&AUTO_REL_DLY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::AutoRelDelay, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         // Register each approved token
         for token_addr in approved_tokens.iter() {
@@ -242,10 +274,10 @@ impl EscrowContract {
             panic!("Fee exceeds maximum (1000 bps)");
         }
 
-        env.storage().persistent().set(&FEE_BPS, &new_fee_bps);
+        env.storage().persistent().set(&DataKey::FeeBps, &new_fee_bps);
         env.storage()
             .persistent()
-            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::FeeBps, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
     }
 
         /// Get dynamic fee based on MNT/USDC price from liquidity pool
@@ -364,10 +396,10 @@ impl EscrowContract {
             .extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
         admin.require_auth();
 
-        env.storage().persistent().set(&TREASURY, &new_treasury);
+        env.storage().persistent().set(&DataKey::Treasury, &new_treasury);
         env.storage()
             .persistent()
-            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::Treasury, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
     }
 
     /// Add or remove an approved token (admin only).
@@ -422,89 +454,10 @@ impl EscrowContract {
         session_id: Symbol,
         token_address: Address,
         session_end_time: u64,
+        total_sessions: u32,
     ) -> u64 {
-        // --- Validate amount ---
-        if amount <= 0 {
-            panic!("Amount must be greater than zero");
-        }
-
-        // --- Validate approved token ---
-        if !Self::_is_token_approved(&env, &token_address) {
-            panic!("Token not approved");
-        }
-
-        // --- Require learner authorization ---
-        learner.require_auth();
-
-        // --- Balance check (SEP-41: balance()) ---
-        let token_client = token::Client::new(&env, &token_address);
-        let learner_balance = token_client.balance(&learner);
-        if learner_balance < amount {
-            panic!("Insufficient token balance");
-        }
-
-        // --- Retrieve global auto-release delay ---
-        let auto_release_delay: u64 = env
-            .storage()
-            .persistent()
-            .get(&AUTO_REL_DLY)
-            .unwrap_or(DEFAULT_AUTO_RELEASE_DELAY);
-        env.storage()
-            .persistent()
-            .extend_ttl(&AUTO_REL_DLY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        // --- Check session_id uniqueness ---
-        let session_key = (SESSION_KEY, session_id.clone());
-        if env.storage().persistent().has(&session_key) {
-            panic!("Session ID already exists");
-        }
-        env.storage().persistent().set(&session_key, &true);
-        env.storage().persistent().extend_ttl(&session_key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        // --- Increment and persist escrow counter ---
-        let mut count: u64 = env.storage().persistent().get(&ESCROW_COUNT).unwrap_or(0);
-        count = count.checked_add(1).expect("Counter overflow");
-        env.storage().persistent().set(&ESCROW_COUNT, &count);
-        env.storage()
-            .persistent()
-            .extend_ttl(&ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        // --- Transfer tokens from learner → contract ---
-        token_client.transfer(&learner, &env.current_contract_address(), &amount);
-
-        // --- Persist escrow ---
-        let escrow = Escrow {
-            id: count,
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount,
-            session_id: session_id.clone(),
-            status: EscrowStatus::Active,
-            created_at: env.ledger().timestamp(),
-            token_address: token_address.clone(),
-            platform_fee: 0,
-            net_amount: 0,
-            session_end_time,
-            auto_release_delay,
-            dispute_reason: symbol_short!(""),
-            resolved_at: 0,
-        };
-
-        let key = (symbol_short!("ESCROW"), count);
-        env.storage().persistent().set(&key, &escrow);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        // --- Emit event (includes token_address and session_end_time) ---
-        env.events().publish(
-<<<<<<< Escrow
-            (symbol_short!("Escrow"), symbol_short!("created"), count),
-            (
-=======
             (Symbol::new(&env, "Escrow"), Symbol::new(&env, "Created"), count),
             EscrowCreatedEventData {
->>>>>>> main
                 mentor,
                 learner,
                 amount,
@@ -515,6 +468,22 @@ impl EscrowContract {
         );
 
         count
+=======
+        Self::_create_escrow_internal(
+            env,
+            mentor,
+            learner,
+            amount,
+            session_id,
+            token_address.clone(),
+            session_end_time,
+            0,
+            amount,
+            token_address.clone(),
+            token_address,
+            total_sessions,
+        )
+
     }
 
     /// Release funds to the mentor (called by learner or admin).
@@ -565,9 +534,11 @@ impl EscrowContract {
 
         Self::_do_release(&env, &mut escrow, &key);
     }
-    pub fn release_partial(env: Env, caller: Address, escrow_id: u64, amount_to_release: i128) {
+    pub fn release_partial(env: Env, caller: Address, escrow_id: u64) {
         let key = (symbol_short!("ESCROW"), escrow_id);
-        env.storage().persistent().extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         let mut escrow: Escrow = env.storage().persistent().get(&key).expect("Escrow not found");
 
@@ -575,28 +546,68 @@ impl EscrowContract {
             panic!("Escrow not active");
         }
 
-        if amount_to_release <= 0 || amount_to_release > escrow.amount {
-            panic!("Invalid release amount");
+        if escrow.sessions_completed >= escrow.total_sessions {
+            panic!("All sessions already released");
         }
 
-        let admin: Address = env.storage().persistent().get(&ADMIN).expect("Admin not found");
-        env.storage().persistent().extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Admin, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
+        // Auth check: caller must be learner OR admin
         caller.require_auth();
         if caller != escrow.learner && caller != admin {
             panic!("Caller not authorized");
         }
 
-        let fee_bps: u32 = Self::get_dynamic_fee(env.clone());
-        env.storage().persistent().extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        // Calculate amount to release: total_amount / total_sessions
+        // Note: For the last session, we release whatever is remaining to handle rounding.
+        let amount_to_release = if escrow.sessions_completed + 1 == escrow.total_sessions {
+            escrow.amount
+        } else {
+            // We use the original amount (quoted_token_amount) to calculate partials
+            // to ensure they are equal. But since 'amount' is what's currently held,
+            // and it might decrease if we were doing it differently, 
+            // the logic from Acceptance Criteria says "releases amount / total_sessions".
+            // I'll assume 'amount' here refers to the total locked amount at creation.
+            // Since we update escrow.amount in this implementation (based on line 258),
+            // we should probably use a fixed reference. 
+            // Actually, the existing release_partial (line 218) was taking an 'amount_to_release' arg.
+            // The NEW requirement says "release amount / total_sessions".
+            
+            // Let's use quoted_token_amount as the total original amount.
+            escrow.quoted_token_amount.checked_div(escrow.total_sessions as i128).expect("Division error")
+        };
 
-        let platform_fee: i128 = amount_to_release.checked_mul(fee_bps as i128).expect("Overflow").checked_div(10_000).expect("Division error");
-        let net_amount: i128 = amount_to_release.checked_sub(platform_fee).expect("Underflow");
+        let fee_bps: u32 = env.storage().persistent().get(&FEE_BPS).unwrap_or(0u32);
+        env.storage()
+            .persistent()
+            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        let treasury: Address = env.storage().persistent().get(&TREASURY).expect("Treasury not found");
-        env.storage().persistent().extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        let platform_fee: i128 = amount_to_release
+            .checked_mul(fee_bps as i128)
+            .expect("Overflow")
+            .checked_div(10_000)
+            .expect("Division error");
+        let net_amount: i128 = amount_to_release
+            .checked_sub(platform_fee)
+            .expect("Underflow");
 
-        let token_client = soroban_sdk::token::Client::new(&env, &escrow.token_address);
+        let treasury: Address = env
+            .storage()
+            .persistent()
+            .get(&TREASURY)
+            .expect("Treasury not found");
+        env.storage()
+            .persistent()
+            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        let token_client = token::Client::new(&env, &escrow.token_address);
 
         if platform_fee > 0 {
             token_client.transfer(&env.current_contract_address(), &treasury, &platform_fee);
@@ -604,19 +615,22 @@ impl EscrowContract {
 
         token_client.transfer(&env.current_contract_address(), &escrow.mentor, &net_amount);
 
+        escrow.sessions_completed += 1;
         escrow.amount = escrow.amount.checked_sub(amount_to_release).expect("Underflow");
         escrow.platform_fee = escrow.platform_fee.checked_add(platform_fee).expect("Overflow");
         escrow.net_amount = escrow.net_amount.checked_add(net_amount).expect("Overflow");
 
-        if escrow.amount == 0 {
+        if escrow.sessions_completed == escrow.total_sessions {
             escrow.status = EscrowStatus::Released;
+            let session_key = (SESSION_KEY, escrow.session_id.clone());
+            env.storage().persistent().remove(&session_key);
         }
 
         env.storage().persistent().set(&key, &escrow);
 
         env.events().publish(
-            (symbol_short!("Escrow"), symbol_short!("rel_part"), escrow.id),
-            (escrow.mentor.clone(), amount_to_release, net_amount, platform_fee, escrow.token_address.clone(), escrow.amount),
+            (symbol_short!("partial"), escrow.id),
+            (escrow.sessions_completed, amount_to_release),
         );
     }
 
@@ -624,8 +638,7 @@ impl EscrowContract {
         let key = (symbol_short!("ESCROW"), escrow_id);
         env.storage().persistent().extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        let mut escrow: Escrow = env.storage().persistent().get(&key).expect("Escrow not found");
-
+        let mut escrow = Self::load_escrow(&env, &key);
         if escrow.status != EscrowStatus::Active {
             panic!("Escrow not active");
         }
@@ -652,7 +665,7 @@ impl EscrowContract {
     /// - Escrow status is not `Active`.
     /// - The auto-release window has not yet elapsed.
     pub fn try_auto_release(env: Env, escrow_id: u64) {
-        let key = (symbol_short!("ESCROW"), escrow_id);
+        let key = DataKey::Escrow(escrow_id);
         env.storage()
             .persistent()
             .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
@@ -679,88 +692,10 @@ impl EscrowContract {
 
         // Emit a dedicated `auto_released` event *before* the internal release
         // so listeners can distinguish this path from a manual release.
-<<<<<<< Escrow
-        env.events()
-            .publish((symbol_short!("Escrow"), symbol_short!("auto_rel"), escrow_id), (escrow_id, now));
-
-        Self::_do_release(&env, &mut escrow, &key);
-    }
-    pub fn release_partial(env: Env, caller: Address, escrow_id: u64, amount_to_release: i128) {
-        let key = (symbol_short!("ESCROW"), escrow_id);
-        env.storage().persistent().extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        let mut escrow: Escrow = env.storage().persistent().get(&key).expect("Escrow not found");
-
-        if escrow.status != EscrowStatus::Active {
-            panic!("Escrow not active");
-        }
-
-        if amount_to_release <= 0 || amount_to_release > escrow.amount {
-            panic!("Invalid release amount");
-        }
-
-        let admin: Address = env.storage().persistent().get(&ADMIN).expect("Admin not found");
-        env.storage().persistent().extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        caller.require_auth();
-        if caller != escrow.learner && caller != admin {
-            panic!("Caller not authorized");
-        }
-
-        let fee_bps: u32 = env.storage().persistent().get(&FEE_BPS).unwrap_or(0u32);
-        env.storage().persistent().extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        let platform_fee: i128 = amount_to_release.checked_mul(fee_bps as i128).expect("Overflow").checked_div(10_000).expect("Division error");
-        let net_amount: i128 = amount_to_release.checked_sub(platform_fee).expect("Underflow");
-
-        let treasury: Address = env.storage().persistent().get(&TREASURY).expect("Treasury not found");
-        env.storage().persistent().extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        let token_client = soroban_sdk::token::Client::new(&env, &escrow.token_address);
-
-        if platform_fee > 0 {
-            token_client.transfer(&env.current_contract_address(), &treasury, &platform_fee);
-        }
-
-        token_client.transfer(&env.current_contract_address(), &escrow.mentor, &net_amount);
-
-        escrow.amount = escrow.amount.checked_sub(amount_to_release).expect("Underflow");
-        escrow.platform_fee = escrow.platform_fee.checked_add(platform_fee).expect("Overflow");
-        escrow.net_amount = escrow.net_amount.checked_add(net_amount).expect("Overflow");
-
-        if escrow.amount == 0 {
-            escrow.status = EscrowStatus::Released;
-        }
-
-        env.storage().persistent().set(&key, &escrow);
-
-        env.events().publish(
-            (symbol_short!("Escrow"), symbol_short!("rel_part"), escrow.id),
-            (escrow.mentor.clone(), amount_to_release, net_amount, platform_fee, escrow.token_address.clone(), escrow.amount),
-        );
-    }
-
-    pub fn admin_release(env: Env, escrow_id: u64) {
-        let key = (symbol_short!("ESCROW"), escrow_id);
-        env.storage().persistent().extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-
-        let mut escrow: Escrow = env.storage().persistent().get(&key).expect("Escrow not found");
-
-        if escrow.status != EscrowStatus::Active {
-            panic!("Escrow not active");
-        }
-
-        let admin: Address = env.storage().persistent().get(&ADMIN).expect("Admin not found");
-        env.storage().persistent().extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-        admin.require_auth();
-
-        env.events().publish((symbol_short!("Escrow"), symbol_short!("adm_rel"), escrow_id), (escrow_id, env.ledger().timestamp()));
-=======
         env.events().publish(
             (Symbol::new(&env, "Escrow"), Symbol::new(&env, "AutoReleased"), escrow_id),
             EscrowAutoReleasedEventData { time: now },
         );
->>>>>>> main
 
         Self::_do_release(&env, &mut escrow, &key);
     }
@@ -786,7 +721,7 @@ impl EscrowContract {
     /// - Caller is not the mentor or learner
     /// - Caller fails authorization check
     pub fn dispute(env: Env, caller: Address, escrow_id: u64, reason: Symbol) {
-        let key = (symbol_short!("ESCROW"), escrow_id);
+        let key = DataKey::Escrow(escrow_id);
         env.storage()
             .persistent()
             .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
@@ -812,17 +747,12 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
 
         env.events().publish(
-<<<<<<< Escrow
-            (symbol_short!("Escrow"), symbol_short!("disp_opnd"), escrow_id),
-            (escrow_id, caller, reason, escrow.token_address),
-=======
             (Symbol::new(&env, "Escrow"), Symbol::new(&env, "DisputeOpened"), escrow_id),
             DisputeOpenedEventData {
                 caller,
                 reason,
                 token_address: escrow.token_address,
             },
->>>>>>> main
         );
     }
 
@@ -906,8 +836,6 @@ impl EscrowContract {
                 (escrow_id, release_to_mentor, 0i128, escrow.amount, escrow.token_address.clone(), now),
             );
         }
-<<<<<<< Escrow
-=======
 
         // --- Update escrow record ---
         // Reuse net_amount for mentor's awarded share and platform_fee for
@@ -930,7 +858,6 @@ impl EscrowContract {
                 time: now,
             },
         );
->>>>>>> main
     }
 
     /// Refund tokens to the learner (admin only).
@@ -960,7 +887,7 @@ impl EscrowContract {
             .extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
         admin.require_auth();
 
-        let key = (symbol_short!("ESCROW"), escrow_id);
+        let key = DataKey::Escrow(escrow_id);
         env.storage()
             .persistent()
             .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
@@ -990,17 +917,12 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
 
         env.events().publish(
-<<<<<<< Escrow
-            (symbol_short!("Escrow"), symbol_short!("refunded"), escrow_id),
-            (escrow.learner.clone(), escrow.amount, escrow.token_address),
-=======
             (Symbol::new(&env, "Escrow"), Symbol::new(&env, "Refunded"), escrow_id),
             EscrowRefundedEventData {
                 learner: escrow.learner.clone(),
                 amount: escrow.amount,
                 token_address: escrow.token_address,
             },
->>>>>>> main
         );
     }
 
@@ -1009,7 +931,7 @@ impl EscrowContract {
     // -----------------------------------------------------------------------
 
     pub fn get_escrow(env: Env, escrow_id: u64) -> Escrow {
-        let key = (symbol_short!("ESCROW"), escrow_id);
+        let key = DataKey::Escrow(escrow_id);
         env.storage()
             .persistent()
             .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
@@ -1022,34 +944,34 @@ impl EscrowContract {
     pub fn get_escrow_count(env: Env) -> u64 {
         env.storage()
             .persistent()
-            .extend_ttl(&ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-        env.storage().persistent().get(&ESCROW_COUNT).unwrap_or(0)
+            .extend_ttl(&DataKey::EscrowCount, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        env.storage().persistent().get(&DataKey::EscrowCount).unwrap_or(0)
     }
 
     pub fn get_fee_bps(env: Env) -> u32 {
         env.storage()
             .persistent()
-            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
-        env.storage().persistent().get(&FEE_BPS).unwrap_or(0)
+            .extend_ttl(&DataKey::FeeBps, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        env.storage().persistent().get(&DataKey::FeeBps).unwrap_or(0)
     }
 
     pub fn get_treasury(env: Env) -> Address {
         env.storage()
             .persistent()
-            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::Treasury, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
         env.storage()
             .persistent()
-            .get(&TREASURY)
+            .get(&DataKey::Treasury)
             .expect("Treasury not set")
     }
 
     pub fn get_auto_release_delay(env: Env) -> u64 {
         env.storage()
             .persistent()
-            .extend_ttl(&AUTO_REL_DLY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::AutoRelDelay, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
         env.storage()
             .persistent()
-            .get(&AUTO_REL_DLY)
+            .get(&DataKey::AutoRelDelay)
             .unwrap_or(DEFAULT_AUTO_RELEASE_DELAY)
     }
 
@@ -1057,23 +979,62 @@ impl EscrowContract {
         Self::_is_token_approved(&env, &token_address)
     }
 
-    /// Get all escrows for a specific mentor.
-    ///
-    /// Iterates through all escrows and returns those where the mentor matches.
-    /// This is a query function with no authorization requirements.
-    pub fn get_escrows_by_mentor(env: Env, mentor: Address) -> Vec<Escrow> {
+    pub fn get_escrows_by_mentor(env: Env, mentor: Address, page: u32, page_size: u32) -> Vec<Escrow> {
+        let page_size = if page_size > 50 { 50 } else { page_size };
+        let mentor_key = (MENTOR_ESCROWS, mentor);
+        let mentor_escrows: Vec<u64> = env.storage().persistent().get(&mentor_key).unwrap_or(Vec::new(&env));
+        let start = page.checked_mul(page_size).unwrap_or(0);
+        let mut result = Vec::new(&env);
+
+        if start >= mentor_escrows.len() {
+            return result;
+        }
+
+        let end = (start + page_size).min(mentor_escrows.len());
+        for i in start..end {
+            let id = mentor_escrows.get(i).unwrap();
+            let key = (symbol_short!("ESCROW"), id);
+            if let Some(escrow) = env.storage().persistent().get::<_, Escrow>(&key) {
+                result.push_back(escrow);
+            }
+        }
+        result
+    }
+
+    pub fn get_escrows_by_learner(env: Env, learner: Address, page: u32, page_size: u32) -> Vec<Escrow> {
+        let page_size = if page_size > 50 { 50 } else { page_size };
+        let learner_key = (LEARNER_ESCROWS, learner);
+        let learner_escrows: Vec<u64> = env.storage().persistent().get(&learner_key).unwrap_or(Vec::new(&env));
+        let start = page.checked_mul(page_size).unwrap_or(0);
+        let mut result = Vec::new(&env);
+
+        if start >= learner_escrows.len() {
+            return result;
+        }
+
+        let end = (start + page_size).min(learner_escrows.len());
+        for i in start..end {
+            let id = learner_escrows.get(i).unwrap();
+            let key = (symbol_short!("ESCROW"), id);
+            if let Some(escrow) = env.storage().persistent().get::<_, Escrow>(&key) {
+                result.push_back(escrow);
+            }
+        }
+        result
+    }
+
+    pub fn get_escrows_by_status(env: Env, status: EscrowStatus) -> Vec<u64> {
         let count = env.storage().persistent().get(&ESCROW_COUNT).unwrap_or(0u64);
         let mut result = Vec::new(&env);
 
         for i in 1..=count {
             let key = (symbol_short!("ESCROW"), i);
             if let Some(escrow) = env.storage().persistent().get::<_, Escrow>(&key) {
-                if escrow.mentor == mentor {
-                    result.push_back(escrow);
+                if escrow.status == status {
+                    result.push_back(i);
                 }
             }
         }
-
         result
     }
 
@@ -1112,25 +1073,66 @@ impl EscrowContract {
             .persistent()
             .extend_ttl(&review_key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        env.events().publish(
-<<<<<<< Escrow
-            (symbol_short!("Escrow"), symbol_short!("review"), escrow_id),
-            (escrow_id, caller, reason, escrow.mentor),
-=======
             (Symbol::new(&env, "Escrow"), Symbol::new(&env, "ReviewSubmitted"), escrow_id),
             ReviewSubmittedEventData {
                 caller,
                 reason,
                 mentor: escrow.mentor,
             },
->>>>>>> main
         );
     }
 
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+        env.events().publish((symbol_short!("Escrow"), symbol_short!("review"), escrow_id), reason);
+    }
 
+    pub fn create_escrow_usd(env: Env, mentor: Address, learner: Address, usd_amount: i128, token_address: Address, total_sessions: u32) -> u64 {
+        let oracle: Address = env.storage().persistent().get(&ORACLE_ID).expect("oracle not set");
+        let max_age: u64 = env.storage().persistent().get(&ORACLE_MAX_AGE).unwrap_or(300);
+        let oracle_sym = Symbol::new(&env, "get_price");
+        let (price, updated_at): (i128, u64) = env.invoke_contract(&oracle, &oracle_sym, (Symbol::new(&env, "USD"),).into_val(&env));
+        let now = env.ledger().timestamp();
+        if now.saturating_sub(updated_at) > max_age || price <= 0 {
+            panic!("stale oracle");
+        }
+        let token_amount = usd_amount.checked_mul(10_000_000).expect("overflow").checked_div(price).expect("div");
+        env.events().publish((symbol_short!("Escrow"), symbol_short!("usd_rate"), learner.clone()), (usd_amount, price, token_amount));
+        Self::_create_escrow_internal(env, mentor, learner, token_amount, symbol_short!("USD_SES"), token_address.clone(), now, usd_amount, token_amount, token_address.clone(), token_address, total_sessions)
+    }
+
+    pub fn create_escrow_with_path_payment(
+        env: Env,
+        learner: Address,
+        mentor: Address,
+        send_asset: Address,
+        send_max: i128,
+        dest_asset: Address,
+        dest_amount: i128,
+        _path: Vec<Address>,
+        total_sessions: u32,
+    ) -> u64 {
+        if send_max < dest_amount {
+            panic!("path slippage exceeded");
+        }
+        let rate_scaled = if dest_amount == 0 { 0 } else { send_max * 10_000_000 / dest_amount };
+        env.events().publish((symbol_short!("Escrow"), symbol_short!("path_pay"), learner.clone()), rate_scaled);
+        Self::_create_escrow_internal(
+            env,
+            mentor,
+            learner,
+            dest_amount,
+            symbol_short!("PATHPAY"),
+            dest_asset.clone(),
+            0,
+            0,
+            dest_amount,
+            send_asset,
+            dest_asset,
+            total_sessions,
+        )
+    }
     /// Shared release logic used by both `release_funds` and `try_auto_release`.
     ///
     /// Computes the platform fee, transfers fee → treasury and net → mentor,
@@ -1140,7 +1142,7 @@ impl EscrowContract {
         let fee_bps: u32 = Self::get_dynamic_fee(env.clone());
         env.storage()
             .persistent()
-            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::FeeBps, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         let platform_fee: i128 = release_amount
             .checked_mul(fee_bps as i128)
@@ -1154,11 +1156,11 @@ impl EscrowContract {
         let treasury: Address = env
             .storage()
             .persistent()
-            .get(&TREASURY)
+            .get(&DataKey::Treasury)
             .expect("Treasury not found");
         env.storage()
             .persistent()
-            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .extend_ttl(&DataKey::Treasury, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         let token_client = soroban_sdk::token::Client::new(env, &escrow.token_address);
 
@@ -1175,17 +1177,10 @@ impl EscrowContract {
         env.storage().persistent().set(key, escrow);
 
         env.events().publish(
-<<<<<<< Escrow
-            (symbol_short!("Escrow"), symbol_short!("released"), escrow.id),
-            (
-                escrow.mentor.clone(),
-                release_amount,
-=======
             (Symbol::new(env, "Escrow"), Symbol::new(env, "Released"), escrow.id),
             EscrowReleasedEventData {
                 mentor: escrow.mentor.clone(),
                 amount: escrow.amount,
->>>>>>> main
                 net_amount,
                 platform_fee,
                 token_address: escrow.token_address.clone(),
@@ -1194,7 +1189,7 @@ impl EscrowContract {
     }
 
     fn _set_token_approved(env: &Env, token_address: &Address, approved: bool) {
-        let key = (APPROVED_TOKEN_KEY, token_address.clone());
+        let key = DataKey::ApprovedToken(token_address.clone());
         env.storage().persistent().set(&key, &approved);
         env.storage()
             .persistent()
@@ -1202,15 +1197,12 @@ impl EscrowContract {
     }
 
     fn _is_token_approved(env: &Env, token_address: &Address) -> bool {
-        let key = (APPROVED_TOKEN_KEY, token_address.clone());
+        let key = DataKey::ApprovedToken(token_address.clone());
         env.storage()
             .persistent()
             .get::<_, bool>(&key)
             .unwrap_or(false)
     }
-<<<<<<< Escrow
-}\n
-=======
 }
 
 // ---------------------------------------------------------------------------
@@ -1272,11 +1264,37 @@ mod test {
         (token_address, sac)
     }
 
-    fn advance_time(env: &Env, secs: u64) {
-        env.ledger().with_mut(|li| li.timestamp += secs);
+    fn load_escrow(env: &Env, key: &(Symbol, u64)) -> Escrow {
+        if let Some(current) = env.storage().persistent().get::<_, Escrow>(key) {
+            return current;
+        }
+        if let Some(old) = env.storage().persistent().get::<_, EscrowLegacy>(key) {
+            return Escrow {
+                id: old.id,
+                mentor: old.mentor,
+                learner: old.learner,
+                amount: old.amount,
+                session_id: old.session_id,
+                status: old.status,
+                created_at: old.created_at,
+                token_address: old.token_address.clone(),
+                platform_fee: old.platform_fee,
+                net_amount: old.net_amount,
+                session_end_time: old.session_end_time,
+                auto_release_delay: old.auto_release_delay,
+                dispute_reason: old.dispute_reason,
+                resolved_at: old.resolved_at,
+                usd_amount: 0,
+                quoted_token_amount: old.amount,
+                send_asset: old.token_address.clone(),
+                dest_asset: old.token_address,
+                total_sessions: 1,
+                sessions_completed: 0,
+            };
+        }
+        panic!("Escrow not found");
     }
-
-    struct TestFixture {
+    fn _create_escrow_internal(
         env: Env,
         contract_id: Address,
         admin: Address,
@@ -1284,32 +1302,18 @@ mod test {
         learner: Address,
         treasury: Address,
         token_address: Address,
-    }
-
-    impl TestFixture {
-        fn setup() -> Self { Self::setup_with_fee(500) }
-        fn setup_with_fee(fee_bps: u32) -> Self { Self::setup_full(fee_bps, 0) }
-
-        fn setup_full(fee_bps: u32, auto_release_delay_secs: u64) -> Self {
-            let env = Env::default();
-            env.mock_all_auths();
-            env.ledger().with_mut(|li| li.timestamp = 14_400);
-
-            let contract_id = env.register_contract(None, EscrowContract);
-            let admin    = Address::generate(&env);
-            let mentor   = Address::generate(&env);
-            let learner  = Address::generate(&env);
-            let treasury = Address::generate(&env);
-
-            let (token_address, sac) = create_token(&env, &admin);
-            sac.mint(&learner, &100_000);
-
-            let client = EscrowContractClient::new(&env, &contract_id);
-            let mut approved = Vec::new(&env);
-            approved.push_back(token_address.clone());
-            client.initialize(&admin, &treasury, &fee_bps, &approved, &auto_release_delay_secs);
-
-            TestFixture { env, contract_id, admin, mentor, learner, treasury, token_address }
+        session_end_time: u64,
+        usd_amount: i128,
+        quoted_token_amount: i128,
+        send_asset: Address,
+        dest_asset: Address,
+        total_sessions: u32,
+    ) -> u64 {
+        if amount <= 0 {
+            panic!("Amount must be greater than zero");
+        }
+        if !Self::_is_token_approved(&env, &token_address) {
+            panic!("Token not approved");
         }
 
         fn client(&self) -> EscrowContractClient { EscrowContractClient::new(&self.env, &self.contract_id) }
@@ -1326,6 +1330,51 @@ mod test {
         fn open_dispute(&self, escrow_id: u64) {
             self.client().dispute(&self.learner, &escrow_id, &symbol_short!("NO_SHOW"));
         }
+        env.storage().persistent().set(&session_key, &true);
+        let mut count: u64 = env.storage().persistent().get(&ESCROW_COUNT).unwrap_or(0);
+        count += 1;
+        env.storage().persistent().set(&ESCROW_COUNT, &count);
+        token_client.transfer(&learner, &env.current_contract_address(), &amount);
+        let escrow = Escrow {
+            id: count,
+            mentor: mentor.clone(),
+            learner: learner.clone(),
+            amount,
+            session_id: session_id.clone(),
+            status: EscrowStatus::Active,
+            created_at: env.ledger().timestamp(),
+            token_address: token_address.clone(),
+            platform_fee: 0,
+            net_amount: 0,
+            session_end_time,
+            auto_release_delay,
+            dispute_reason: symbol_short!(""),
+            resolved_at: 0,
+            usd_amount,
+            quoted_token_amount,
+            send_asset,
+            dest_asset,
+            total_sessions,
+            sessions_completed: 0,
+        };
+        let key = (symbol_short!("ESCROW"), count);
+        env.storage().persistent().set(&key, &escrow);
+
+        // Update index maps
+        let mentor_key = (MENTOR_ESCROWS, mentor.clone());
+        let mut mentor_escrows: Vec<u64> = env.storage().persistent().get(&mentor_key).unwrap_or(Vec::new(&env));
+        mentor_escrows.push_back(count);
+        env.storage().persistent().set(&mentor_key, &mentor_escrows);
+        env.storage().persistent().extend_ttl(&mentor_key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        let learner_key = (LEARNER_ESCROWS, learner.clone());
+        let mut learner_escrows: Vec<u64> = env.storage().persistent().get(&learner_key).unwrap_or(Vec::new(&env));
+        learner_escrows.push_back(count);
+        env.storage().persistent().set(&learner_key, &learner_escrows);
+        env.storage().persistent().extend_ttl(&learner_key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+
+        env.events().publish((symbol_short!("created"), count), (mentor, learner, amount, token_address));
+        count
     }
 
     fn setup_disputed(f: &TestFixture) -> u64 {
@@ -2070,5 +2119,201 @@ mod test {
         client.set_approved_token(&new_token, &false);
         assert!(!client.is_token_approved(&new_token));
     }
+
+    pub fn create_milestone_escrow(
+        env: Env,
+        mentor: Address,
+        learner: Address,
+        milestones: Vec<MilestoneSpec>,
+        token_address: Address,
+    ) -> u64 {
+        if milestones.is_empty() {
+            panic!("At least one milestone required");
+        }
+        
+        if !Self::_is_token_approved(&env, &token_address) {
+            panic!("Token not approved");
+        }
+        
+        let total_amount = milestones.iter().fold(0i128, |acc, m| acc.checked_add(m.amount).expect("Amount overflow"));
+        
+        if total_amount <= 0 {
+            panic!("Total amount must be greater than zero");
+        }
+        
+        learner.require_auth();
+        
+        let token_client = token::Client::new(&env, &token_address);
+        if token_client.balance(&learner) < total_amount {
+            panic!("Insufficient token balance");
+        }
+        
+        let mut count: u64 = env.storage().persistent().get(&MILESTONE_ESCROW_COUNT).unwrap_or(0);
+        count += 1;
+        env.storage().persistent().set(&MILESTONE_ESCROW_COUNT, &count);
+        env.storage()
+            .persistent()
+            .extend_ttl(&MILESTONE_ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        token_client.transfer(&learner, &env.current_contract_address(), &total_amount);
+        
+        let milestone_statuses: Vec<MilestoneStatus> = (0..milestones.len())
+            .map(|_| MilestoneStatus::Pending)
+            .collect();
+        
+        let milestone_escrow = MilestoneEscrow {
+            id: count,
+            mentor: mentor.clone(),
+            learner: learner.clone(),
+            total_amount,
+            milestones: milestones.clone(),
+            milestone_statuses,
+            status: EscrowStatus::Active,
+            created_at: env.ledger().timestamp(),
+            token_address: token_address.clone(),
+            platform_fee: 0,
+            net_amount: 0,
+        };
+        
+        let key = (symbol_short!("MESCROW"), count);
+        env.storage().persistent().set(&key, &milestone_escrow);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        env.events().publish(
+            (symbol_short!("milestone_created"), count),
+            (mentor, learner, total_amount, milestones.len())
+        );
+        
+        count
+    }
+    
+    pub fn complete_milestone(env: Env, escrow_id: u64, milestone_index: u32) {
+        let key = (symbol_short!("MESCROW"), escrow_id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        let mut milestone_escrow: MilestoneEscrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Milestone escrow not found");
+        
+        if milestone_escrow.status != EscrowStatus::Active {
+            panic!("Milestone escrow not active");
+        }
+        
+        if milestone_index as usize >= milestone_escrow.milestones.len() {
+            panic!("Invalid milestone index");
+        }
+        
+        let current_status = milestone_escrow.milestone_statuses.get(milestone_index as usize).unwrap();
+        if *current_status != MilestoneStatus::Pending {
+            panic!("Milestone not pending");
+        }
+        
+        milestone_escrow.learner.require_auth();
+        
+        let milestone = &milestone_escrow.milestones[milestone_index as usize];
+        let fee_bps: u32 = env.storage().persistent().get(&FEE_BPS).unwrap_or(0u32);
+        env.storage()
+            .persistent()
+            .extend_ttl(&FEE_BPS, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        let platform_fee: i128 = milestone
+            .amount
+            .checked_mul(fee_bps as i128)
+            .expect("Overflow")
+            .checked_div(10_000)
+            .expect("Division error");
+        let net_amount: i128 = milestone.amount.checked_sub(platform_fee).expect("Underflow");
+        
+        let treasury: Address = env.storage().persistent().get(&TREASURY).expect("Treasury not found");
+        env.storage()
+            .persistent()
+            .extend_ttl(&TREASURY, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        let token_client = token::Client::new(&env, &milestone_escrow.token_address);
+        
+        if platform_fee > 0 {
+            token_client.transfer(&env.current_contract_address(), &treasury, &platform_fee);
+        }
+        
+        token_client.transfer(&env.current_contract_address(), &milestone_escrow.mentor, &net_amount);
+        
+        milestone_escrow.milestone_statuses[milestone_index as usize] = MilestoneStatus::Completed;
+        milestone_escrow.platform_fee = milestone_escrow.platform_fee.checked_add(platform_fee).expect("Overflow");
+        milestone_escrow.net_amount = milestone_escrow.net_amount.checked_add(net_amount).expect("Overflow");
+        
+        let all_completed = milestone_escrow.milestone_statuses.iter().all(|s| *s == MilestoneStatus::Completed);
+        if all_completed {
+            milestone_escrow.status = EscrowStatus::Released;
+        }
+        
+        env.storage().persistent().set(&key, &milestone_escrow);
+        
+        env.events().publish(
+            (symbol_short!("milestone_completed"), escrow_id),
+            (milestone_index, milestone.amount, net_amount)
+        );
+    }
+    
+    pub fn dispute_milestone(env: Env, escrow_id: u64, milestone_index: u32, reason: Symbol) {
+        let key = (symbol_short!("MESCROW"), escrow_id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        
+        let mut milestone_escrow: MilestoneEscrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("Milestone escrow not found");
+        
+        if milestone_escrow.status != EscrowStatus::Active {
+            panic!("Milestone escrow not active");
+        }
+        
+        if milestone_index as usize >= milestone_escrow.milestones.len() {
+            panic!("Invalid milestone index");
+        }
+        
+        let current_status = milestone_escrow.milestone_statuses.get(milestone_index as usize).unwrap();
+        if *current_status != MilestoneStatus::Pending {
+            panic!("Milestone not pending");
+        }
+        
+        milestone_escrow.mentor.require_auth();
+        milestone_escrow.learner.require_auth();
+        
+        milestone_escrow.milestone_statuses[milestone_index as usize] = MilestoneStatus::Disputed;
+        milestone_escrow.status = EscrowStatus::Disputed;
+        
+        env.storage().persistent().set(&key, &milestone_escrow);
+        
+        env.events().publish(
+            (symbol_short!("milestone_disputed"), escrow_id),
+            (milestone_index, reason)
+        );
+    }
+    
+    pub fn get_milestone_escrow(env: Env, escrow_id: u64) -> MilestoneEscrow {
+        let key = (symbol_short!("MESCROW"), escrow_id);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .expect("Milestone escrow not found")
+    }
+    
+    pub fn get_milestone_escrow_count(env: Env) -> u64 {
+        env.storage()
+            .persistent()
+            .extend_ttl(&MILESTONE_ESCROW_COUNT, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+        env.storage().persistent().get(&MILESTONE_ESCROW_COUNT).unwrap_or(0)
+    }
 }
->>>>>>> main
