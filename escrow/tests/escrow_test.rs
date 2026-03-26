@@ -256,3 +256,104 @@ fn test_try_auto_release() {
     let e = f.client().get_escrow(&id);
     assert_eq!(e.status, EscrowStatus::Released);
 }
+
+#[test]
+fn test_query_by_mentor_pagination() {
+    let f = TestFixture::setup();
+    let mentor = Address::generate(&f.env);
+    let learner = f.learner.clone();
+    
+    // Create 5 escrows for the same mentor
+    for i in 0..5 {
+        let session_id = Symbol::new(&f.env, &format!("S{}", i));
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
+    }
+    
+    // Page 0, size 2 -> should return 2 escrows (ids 1, 2)
+    let page0 = f.client().get_escrows_by_mentor(&mentor, &0, &2);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get(0).unwrap().id, 1);
+    assert_eq!(page0.get(1).unwrap().id, 2);
+    
+    // Page 1, size 2 -> should return 2 escrows (ids 3, 4)
+    let page1 = f.client().get_escrows_by_mentor(&mentor, &1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().id, 3);
+    assert_eq!(page1.get(1).unwrap().id, 4);
+    
+    // Page 2, size 2 -> should return 1 escrow (id 5)
+    let page2 = f.client().get_escrows_by_mentor(&mentor, &2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, 5);
+    
+    // Page 3, size 2 -> should return 0 escrows
+    let page3 = f.client().get_escrows_by_mentor(&mentor, &3, &2);
+    assert_eq!(page3.len(), 0);
+}
+
+#[test]
+fn test_query_by_learner_pagination() {
+    let f = TestFixture::setup();
+    let mentor = f.mentor.clone();
+    let learner = Address::generate(&f.env);
+    
+    // Mint tokens for the new learner
+    f.sac().mint(&learner, &100_000);
+    
+    // Create 3 escrows for the same learner
+    for i in 0..3 {
+        let session_id = Symbol::new(&f.env, &format!("L{}", i));
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
+    }
+    
+    // Page 0, size 2 -> 2 escrows
+    let page0 = f.client().get_escrows_by_learner(&learner, &0, &2);
+    assert_eq!(page0.len(), 2);
+    
+    // Page 1, size 2 -> 1 escrow
+    let page1 = f.client().get_escrows_by_learner(&learner, &1, &2);
+    assert_eq!(page1.len(), 1);
+}
+
+#[test]
+fn test_query_by_status() {
+    let f = TestFixture::setup();
+    let id1 = f.create_escrow_at(1_000, 0, "S1");
+    let id2 = f.create_escrow_at(1_000, 0, "S2");
+    let id3 = f.create_escrow_at(1_000, 0, "S3");
+    
+    // All should be Active initially
+    let active_ids = f.client().get_escrows_by_status(&EscrowStatus::Active);
+    assert_eq!(active_ids.len(), 3);
+    assert!(active_ids.contains(id1));
+    assert!(active_ids.contains(id2));
+    assert!(active_ids.contains(id3));
+    
+    // Release one
+    f.client().release_funds(&f.learner, &id1);
+    
+    let active_ids2 = f.client().get_escrows_by_status(&EscrowStatus::Active);
+    assert_eq!(active_ids2.len(), 2);
+    assert!(!active_ids2.contains(id1));
+    
+    let released_ids = f.client().get_escrows_by_status(&EscrowStatus::Released);
+    assert_eq!(released_ids.len(), 1);
+    assert!(released_ids.contains(id1));
+}
+
+#[test]
+fn test_page_size_cap() {
+    let f = TestFixture::setup();
+    let mentor = f.mentor.clone();
+    let learner = f.learner.clone();
+    
+    // Create 60 escrows
+    for i in 0..60 {
+        let session_id = Symbol::new(&f.env, &format!("S{}", i));
+        f.client().create_escrow(&mentor, &learner, &100, &session_id, &f.token_address, &0);
+    }
+    
+    // Try to get 100 per page, should be capped at 50
+    let results = f.client().get_escrows_by_mentor(&mentor, &0, &100);
+    assert_eq!(results.len(), 50);
+}
