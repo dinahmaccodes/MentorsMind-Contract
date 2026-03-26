@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "escrow",
-    # "multisig",
+    "multisig",
     # "payment-router",
 ]
 
