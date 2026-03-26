@@ -65,8 +65,25 @@ impl TestFixture {
 
     fn create_escrow_at(&self, amount: i128, session_end_time: u64, session_id: &str) -> u64 {
         self.client().create_escrow(
-            &self.mentor, &self.learner, &amount,
-            &Symbol::new(&self.env, session_id), &self.token_address, &session_end_time,
+            &self.mentor,
+            &self.learner,
+            &amount,
+            &Symbol::new(&self.env, session_id),
+            &self.token_address,
+            &session_end_time,
+            &1,
+        )
+    }
+
+    fn create_package_escrow_at(&self, amount: i128, session_end_time: u64, session_id: &str, total_sessions: u32) -> u64 {
+        self.client().create_escrow(
+            &self.mentor,
+            &self.learner,
+            &amount,
+            &Symbol::new(&self.env, session_id),
+            &self.token_address,
+            &session_end_time,
+            &total_sessions,
         )
     }
 
@@ -96,36 +113,82 @@ fn test_session_id_uniqueness() {
 #[test]
 fn test_release_partial() {
     let f = TestFixture::setup_with_fee(500); // 5% fee
-    let id = f.create_escrow_at(1_000, 0, "S1");
+    let id = f.create_package_escrow_at(1_200, 0, "S1", 3); // 3 sessions, 400 each
     
     let mentor_before = f.token().balance(&f.mentor);
     let treasury_before = f.token().balance(&f.treasury);
     
-    // Release 400
-    f.client().release_partial(&f.learner, &id, &400);
+    // Release 1st session (400)
+    f.client().release_partial(&f.learner, &id);
     
     // 400 * 0.05 = 20 fee, 380 net
     assert_eq!(f.token().balance(&f.mentor), mentor_before + 380);
     assert_eq!(f.token().balance(&f.treasury), treasury_before + 20);
     
     let e = f.client().get_escrow(&id);
-    assert_eq!(e.amount, 600);
+    assert_eq!(e.amount, 800);
+    assert_eq!(e.sessions_completed, 1);
     assert_eq!(e.status, EscrowStatus::Active);
-    assert_eq!(e.platform_fee, 20);
-    assert_eq!(e.net_amount, 380);
     
-    // Release remaining 600
-    f.client().release_partial(&f.learner, &id, &600);
-    
-    // 600 * 0.05 = 30 fee, 570 net. Total: 50 fee, 950 net.
-    assert_eq!(f.token().balance(&f.mentor), mentor_before + 950);
-    assert_eq!(f.token().balance(&f.treasury), treasury_before + 50);
+    // Release 2nd session (400)
+    f.client().release_partial(&f.learner, &id);
+    assert_eq!(f.token().balance(&f.mentor), mentor_before + 760);
+    assert_eq!(f.token().balance(&f.treasury), treasury_before + 40);
     
     let e2 = f.client().get_escrow(&id);
-    assert_eq!(e2.amount, 0);
-    assert_eq!(e2.status, EscrowStatus::Released);
-    assert_eq!(e2.platform_fee, 50);
-    assert_eq!(e2.net_amount, 950);
+    assert_eq!(e2.amount, 400);
+    assert_eq!(e2.sessions_completed, 2);
+    assert_eq!(e2.status, EscrowStatus::Active);
+
+    // Release 3rd session (remaining 400)
+    f.client().release_partial(&f.learner, &id);
+    assert_eq!(f.token().balance(&f.mentor), mentor_before + 1140);
+    assert_eq!(f.token().balance(&f.treasury), treasury_before + 60);
+    
+    let e3 = f.client().get_escrow(&id);
+    assert_eq!(e3.amount, 0);
+    assert_eq!(e3.sessions_completed, 3);
+    assert_eq!(e3.status, EscrowStatus::Released);
+}
+
+#[test]
+fn test_three_session_package_full_lifecycle() {
+    let f = TestFixture::setup_with_fee(1000); // 10% fee
+    let id = f.create_package_escrow_at(3000, 0, "PKG1", 3);
+    
+    // 1st release
+    f.client().release_partial(&f.learner, &id);
+    let e1 = f.client().get_escrow(&id);
+    assert_eq!(e1.amount, 2000);
+    assert_eq!(e1.sessions_completed, 1);
+    assert_eq!(f.token().balance(&f.mentor), 900); // 1000 - 100 fee
+    
+    // 2nd release
+    f.client().release_partial(&f.learner, &id);
+    let e2 = f.client().get_escrow(&id);
+    assert_eq!(e2.amount, 1000);
+    assert_eq!(e2.sessions_completed, 2);
+    assert_eq!(f.token().balance(&f.mentor), 1800);
+    
+    // 3rd release
+    f.client().release_partial(&f.learner, &id);
+    let e3 = f.client().get_escrow(&id);
+    assert_eq!(e3.amount, 0);
+    assert_eq!(e3.sessions_completed, 3);
+    assert_eq!(e3.status, EscrowStatus::Released);
+    assert_eq!(f.token().balance(&f.mentor), 2700);
+    assert_eq!(f.token().balance(&f.treasury), 300);
+}
+
+#[test]
+#[should_panic(expected = "Escrow not active")]
+fn test_over_release_panics() {
+    let f = TestFixture::setup();
+    let id = f.create_package_escrow_at(1000, 0, "S1", 1);
+    
+    f.client().release_partial(&f.learner, &id);
+    // Should panic
+    f.client().release_partial(&f.learner, &id);
 }
 
 #[test]
@@ -194,227 +257,103 @@ fn test_try_auto_release() {
     assert_eq!(e.status, EscrowStatus::Released);
 }
 
-// -----------------------------------------------------------------------
-// Milestone Tests
-// -----------------------------------------------------------------------
-
 #[test]
-fn test_create_milestone_escrow() {
+fn test_query_by_mentor_pagination() {
     let f = TestFixture::setup();
+    let mentor = Address::generate(&f.env);
+    let learner = f.learner.clone();
     
-    let mut milestones = Vec::new(&f.env);
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 1000,
-    });
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[2; 32]),
-        amount: 2000,
-    });
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[3; 32]),
-        amount: 1500,
-    });
-    
-    let mentor_before = f.token().balance(&f.mentor);
-    let learner_before = f.token().balance(&f.learner);
-    let contract_before = f.token().balance(&f.client().contract_id);
-    
-    let escrow_id = f.client().create_milestone_escrow(
-        &f.mentor,
-        &f.learner,
-        &milestones,
-        &f.token_address,
-    );
-    
-    // Verify total amount transferred (1000 + 2000 + 1500 = 4500)
-    assert_eq!(f.token().balance(&f.learner), learner_before - 4500);
-    assert_eq!(f.token().balance(&f.client().contract_id), contract_before + 4500);
-    assert_eq!(f.token().balance(&f.mentor), mentor_before);
-    
-    let escrow = f.client().get_milestone_escrow(&escrow_id);
-    assert_eq!(escrow.id, escrow_id);
-    assert_eq!(escrow.mentor, f.mentor);
-    assert_eq!(escrow.learner, f.learner);
-    assert_eq!(escrow.total_amount, 4500);
-    assert_eq!(escrow.milestones.len(), 3);
-    assert_eq!(escrow.milestone_statuses.len(), 3);
-    assert_eq!(escrow.status, EscrowStatus::Active);
-    
-    // All milestones should start as Pending
-    for status in escrow.milestone_statuses.iter() {
-        assert_eq!(status, MilestoneStatus::Pending);
+    // Create 5 escrows for the same mentor
+    for i in 0..5 {
+        let session_id = Symbol::new(&f.env, &format!("S{}", i));
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
     }
+    
+    // Page 0, size 2 -> should return 2 escrows (ids 1, 2)
+    let page0 = f.client().get_escrows_by_mentor(&mentor, &0, &2);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get(0).unwrap().id, 1);
+    assert_eq!(page0.get(1).unwrap().id, 2);
+    
+    // Page 1, size 2 -> should return 2 escrows (ids 3, 4)
+    let page1 = f.client().get_escrows_by_mentor(&mentor, &1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().id, 3);
+    assert_eq!(page1.get(1).unwrap().id, 4);
+    
+    // Page 2, size 2 -> should return 1 escrow (id 5)
+    let page2 = f.client().get_escrows_by_mentor(&mentor, &2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, 5);
+    
+    // Page 3, size 2 -> should return 0 escrows
+    let page3 = f.client().get_escrows_by_mentor(&mentor, &3, &2);
+    assert_eq!(page3.len(), 0);
 }
 
 #[test]
-fn test_create_milestone_escrow_validation() {
+fn test_query_by_learner_pagination() {
     let f = TestFixture::setup();
+    let mentor = f.mentor.clone();
+    let learner = Address::generate(&f.env);
     
-    // Test empty milestones
-    let empty_milestones = Vec::new(&f.env);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.client().create_milestone_escrow(&f.mentor, &f.learner, &empty_milestones, &f.token_address);
-    }));
-    assert!(result.is_err());
+    // Mint tokens for the new learner
+    f.sac().mint(&learner, &100_000);
     
-    // Test zero amount milestone
-    let mut zero_milestones = Vec::new(&f.env);
-    zero_milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 0,
-    });
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.client().create_milestone_escrow(&f.mentor, &f.learner, &zero_milestones, &f.token_address);
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_complete_all_milestones() {
-    let f = TestFixture::setup_with_fee(500); // 5% fee
-    
-    let mut milestones = Vec::new(&f.env);
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 1000,
-    });
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[2; 32]),
-        amount: 2000,
-    });
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[3; 32]),
-        amount: 1500,
-    });
-    
-    let escrow_id = f.client().create_milestone_escrow(
-        &f.mentor,
-        &f.learner,
-        &milestones,
-        &f.token_address,
-    );
-    
-    let mentor_before = f.token().balance(&f.mentor);
-    let treasury_before = f.token().balance(&f.treasury);
-    
-    // Complete milestone 0 (1000 - 5% = 950 to mentor, 50 to treasury)
-    f.client().complete_milestone(&escrow_id, &0);
-    assert_eq!(f.token().balance(&f.mentor), mentor_before + 950);
-    assert_eq!(f.token().balance(&f.treasury), treasury_before + 50);
-    
-    let escrow = f.client().get_milestone_escrow(&escrow_id);
-    assert_eq!(escrow.milestone_statuses.get(0).unwrap(), &MilestoneStatus::Completed);
-    assert_eq!(escrow.milestone_statuses.get(1).unwrap(), &MilestoneStatus::Pending);
-    assert_eq!(escrow.milestone_statuses.get(2).unwrap(), &MilestoneStatus::Pending);
-    assert_eq!(escrow.status, EscrowStatus::Active);
-    
-    // Complete milestone 1 (2000 - 5% = 1900 to mentor, 100 to treasury)
-    f.client().complete_milestone(&escrow_id, &1);
-    assert_eq!(f.token().balance(&f.mentor), mentor_before + 950 + 1900);
-    assert_eq!(f.token().balance(&f.treasury), treasury_before + 50 + 100);
-    
-    // Complete milestone 2 (1500 - 5% = 1425 to mentor, 75 to treasury)
-    f.client().complete_milestone(&escrow_id, &2);
-    assert_eq!(f.token().balance(&f.mentor), mentor_before + 950 + 1900 + 1425);
-    assert_eq!(f.token().balance(&f.treasury), treasury_before + 50 + 100 + 75);
-    
-    let final_escrow = f.client().get_milestone_escrow(&escrow_id);
-    assert_eq!(final_escrow.status, EscrowStatus::Released);
-    assert_eq!(final_escrow.platform_fee, 225); // 50 + 100 + 75
-    assert_eq!(final_escrow.net_amount, 4275); // 950 + 1900 + 1425
-    
-    // All milestones should be completed
-    for status in final_escrow.milestone_statuses.iter() {
-        assert_eq!(status, MilestoneStatus::Completed);
+    // Create 3 escrows for the same learner
+    for i in 0..3 {
+        let session_id = Symbol::new(&f.env, &format!("L{}", i));
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
     }
+    
+    // Page 0, size 2 -> 2 escrows
+    let page0 = f.client().get_escrows_by_learner(&learner, &0, &2);
+    assert_eq!(page0.len(), 2);
+    
+    // Page 1, size 2 -> 1 escrow
+    let page1 = f.client().get_escrows_by_learner(&learner, &1, &2);
+    assert_eq!(page1.len(), 1);
 }
 
 #[test]
-fn test_dispute_milestone() {
+fn test_query_by_status() {
     let f = TestFixture::setup();
+    let id1 = f.create_escrow_at(1_000, 0, "S1");
+    let id2 = f.create_escrow_at(1_000, 0, "S2");
+    let id3 = f.create_escrow_at(1_000, 0, "S3");
     
-    let mut milestones = Vec::new(&f.env);
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 1000,
-    });
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[2; 32]),
-        amount: 2000,
-    });
+    // All should be Active initially
+    let active_ids = f.client().get_escrows_by_status(&EscrowStatus::Active);
+    assert_eq!(active_ids.len(), 3);
+    assert!(active_ids.contains(id1));
+    assert!(active_ids.contains(id2));
+    assert!(active_ids.contains(id3));
     
-    let escrow_id = f.client().create_milestone_escrow(
-        &f.mentor,
-        &f.learner,
-        &milestones,
-        &f.token_address,
-    );
+    // Release one
+    f.client().release_funds(&f.learner, &id1);
     
-    // Complete first milestone
-    f.client().complete_milestone(&escrow_id, &0);
+    let active_ids2 = f.client().get_escrows_by_status(&EscrowStatus::Active);
+    assert_eq!(active_ids2.len(), 2);
+    assert!(!active_ids2.contains(id1));
     
-    // Dispute second milestone
-    f.client().dispute_milestone(&escrow_id, &1, &symbol_short!("QUALITY_ISSUE"));
-    
-    let escrow = f.client().get_milestone_escrow(&escrow_id);
-    assert_eq!(escrow.milestone_statuses.get(0).unwrap(), &MilestoneStatus::Completed);
-    assert_eq!(escrow.milestone_statuses.get(1).unwrap(), &MilestoneStatus::Disputed);
-    assert_eq!(escrow.status, EscrowStatus::Disputed);
+    let released_ids = f.client().get_escrows_by_status(&EscrowStatus::Released);
+    assert_eq!(released_ids.len(), 1);
+    assert!(released_ids.contains(id1));
 }
 
 #[test]
-fn test_milestone_validation() {
+fn test_page_size_cap() {
     let f = TestFixture::setup();
+    let mentor = f.mentor.clone();
+    let learner = f.learner.clone();
     
-    let mut milestones = Vec::new(&f.env);
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 1000,
-    });
+    // Create 60 escrows
+    for i in 0..60 {
+        let session_id = Symbol::new(&f.env, &format!("S{}", i));
+        f.client().create_escrow(&mentor, &learner, &100, &session_id, &f.token_address, &0);
+    }
     
-    let escrow_id = f.client().create_milestone_escrow(
-        &f.mentor,
-        &f.learner,
-        &milestones,
-        &f.token_address,
-    );
-    
-    // Test invalid milestone index
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.client().complete_milestone(&escrow_id, &5);
-    }));
-    assert!(result.is_err());
-    
-    // Test completing already completed milestone
-    f.client().complete_milestone(&escrow_id, &0);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.client().complete_milestone(&escrow_id, &0);
-    }));
-    assert!(result.is_err());
-    
-    // Test disputing completed milestone
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        f.client().dispute_milestone(&escrow_id, &0, &symbol_short!("LATE"));
-    }));
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_milestone_escrow_count() {
-    let f = TestFixture::setup();
-    
-    assert_eq!(f.client().get_milestone_escrow_count(), 0);
-    
-    let mut milestones = Vec::new(&f.env);
-    milestones.push_back(MilestoneSpec {
-        description_hash: BytesN::from_array(&f.env, &[1; 32]),
-        amount: 1000,
-    });
-    
-    f.client().create_milestone_escrow(&f.mentor, &f.learner, &milestones, &f.token_address);
-    assert_eq!(f.client().get_milestone_escrow_count(), 1);
-    
-    f.client().create_milestone_escrow(&f.mentor, &f.learner, &milestones, &f.token_address);
-    assert_eq!(f.client().get_milestone_escrow_count(), 2);
+    // Try to get 100 per page, should be capped at 50
+    let results = f.client().get_escrows_by_mentor(&mentor, &0, &100);
+    assert_eq!(results.len(), 50);
 }
