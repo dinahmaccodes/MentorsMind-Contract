@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec, IntoVal, BytesN, Val};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec, BytesN};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -318,4 +318,11 @@ impl EscrowContract {
         env.storage().persistent().extend_ttl(&key, EXTEND_TTL_THRESHOLD, EXTEND_TTL_BUMP);
     }
     fn _is_token_approved(env: &Env, tok: &Address) -> bool { env.storage().persistent().get::<_, bool>(&DataKey::ApprovedToken(tok.clone())).unwrap_or(false) }
+
+    pub fn get_auto_release_delay(env: Env) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AutoRelDelay)
+            .unwrap_or(86400)
+    }
 }

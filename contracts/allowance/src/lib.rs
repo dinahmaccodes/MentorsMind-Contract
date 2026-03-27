@@ -64,7 +64,7 @@ impl RecurringAllowanceContract {
         env.storage().persistent().set(&key, &record);
 
         env.events().publish(
-            (symbol_short!("allowance"), symbol_short!("authorized"), owner),
+            (symbol_short!("allowance"), symbol_short!("auth"), owner),
             (spender, token, amount_per_period, max_periods, period_seconds),
         );
     }
@@ -124,7 +124,7 @@ impl RecurringAllowanceContract {
         env.storage().persistent().set(&key, &record);
 
         env.events().publish(
-            (symbol_short!("allowance"), symbol_short!("payment_pulled"), owner),
+            (symbol_short!("allowance"), symbol_short!("pay_pull"), owner),
             (spender, token, amount, record.periods_used),
         );
     }
@@ -234,6 +234,9 @@ mod tests {
 
         let owner = Address::generate(&env);
         let spender = Address::generate(&env);
+
+        let token = MockTokenClient::new(&env, &token_id);
+        token.mint(&owner, &1_000);
 
         allowance.authorize(&owner, &spender, &token_id, &100, &5, &60);
         allowance.pull_payment(&spender, &owner, &token_id, &100);
