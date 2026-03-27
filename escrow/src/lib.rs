@@ -60,6 +60,15 @@ pub enum MilestoneStatus {
 }
 
 #[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
+pub enum KycLevel {
+    None = 0,
+    Basic = 1,
+    Enhanced = 2,
+    Institutional = 3,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct MilestoneSpec {
     pub description_hash: BytesN<32>,
@@ -211,6 +220,7 @@ const AUTO_REL_DLY: Symbol = symbol_short!("AR_DELAY");
 const SESSION_KEY: Symbol = symbol_short!("SESSION");
 const MENTOR_ESCROWS: Symbol = symbol_short!("MNT_ESC");
 const LEARNER_ESCROWS: Symbol = symbol_short!("LRN_ESC");
+const KYC_REGISTRY: Symbol = symbol_short!("KYC_REG");
 const MAX_FEE_BPS: u32 = 1_000;
 const DEFAULT_AUTO_RELEASE_DELAY: u64 = 72 * 60 * 60;
 
@@ -223,6 +233,11 @@ const MESCROW_SYM: Symbol = symbol_short!("MESCROW");
 
 #[contract]
 pub struct EscrowContract;
+
+#[soroban_sdk::contractclient(name = "KycRegistryClient")]
+pub trait KycRegistryTrait {
+    fn is_kyc_valid(env: Env, user: Address, min_level: KycLevel) -> bool;
+}
 
 #[contractimpl]
 impl EscrowContract {
