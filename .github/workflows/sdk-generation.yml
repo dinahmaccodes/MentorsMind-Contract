@@ -12,7 +12,7 @@ on:
       - 'escrow/**'
 
 env:
-  SOROBAN_CLI_VERSION: "21.7.7"
+  SOROBAN_CLI_VERSION: "21.0.0"
 
 jobs:
   generate-sdk:
