@@ -4,6 +4,7 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal,
     Symbol,
 };
+use shared::{StateMachine};
 
 const ADMIN: Symbol = symbol_short!("ADMIN");
 const TOKEN: Symbol = symbol_short!("TOKEN");
@@ -33,6 +34,20 @@ pub enum ProposalStatus {
     Failed,
     Executed,
     Cancelled,
+}
+
+impl StateMachine for ProposalStatus {
+    type State = ProposalStatus;
+
+    fn is_valid_transition(_env: &Env, from: &Self::State, to: &Self::State) -> bool {
+        match (from, to) {
+            (ProposalStatus::Active, ProposalStatus::Passed) => true,
+            (ProposalStatus::Active, ProposalStatus::Failed) => true,
+            (ProposalStatus::Active, ProposalStatus::Cancelled) => true,
+            (ProposalStatus::Passed, ProposalStatus::Executed) => true,
+            _ => false,
+        }
+    }
 }
 
 #[contracttype]
@@ -139,7 +154,7 @@ impl GovernanceContract {
             .set(&DataKey::Proposal(count), &proposal);
 
         env.events().publish(
-            (symbol_short!("governance"), symbol_short!("proposal_created"), count),
+            (Symbol::new(&env, "governance"), Symbol::new(&env, "proposal_created"), count),
             (proposer, proposal.snapshot_ledger, proposal.voting_ends_at),
         );
 
@@ -183,7 +198,7 @@ impl GovernanceContract {
 
         env.events().publish(
             (
-                symbol_short!("governance"),
+                Symbol::new(&env, "governance"),
                 symbol_short!("vote_cast"),
                 proposal_id,
             ),
@@ -243,8 +258,8 @@ impl GovernanceContract {
 
         env.events().publish(
             (
-                symbol_short!("governance"),
-                symbol_short!("proposal_executed"),
+                Symbol::new(&env, "governance"),
+                Symbol::new(&env, "proposal_executed"),
                 proposal_id,
             ),
             true,

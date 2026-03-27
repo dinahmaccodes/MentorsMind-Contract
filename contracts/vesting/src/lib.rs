@@ -293,8 +293,8 @@ impl VestingContract {
 mod test {
     extern crate std;
     use super::*;
-    use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke, Events};
-    use soroban_sdk::{Env, IntoVal, Symbol, vec};
+    use soroban_sdk::testutils::{Address as _, MockAuth, MockAuthInvoke, Events, Ledger};
+    use soroban_sdk::{Env, IntoVal, Symbol, vec, String};
 
     fn create_mock_token(env: &Env) -> Address {
         let token_contract_id = env.register_contract(None, MockToken);
@@ -342,7 +342,7 @@ mod test {
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
         let token = create_mock_token(&env);
-        let vesting_contract_id = create_vesting_contract(&env, token, admin.clone());
+        let vesting_contract_id = create_vesting_contract(&env, token.clone(), admin.clone());
         let vesting_client = VestingContractClient::new(&env, &vesting_contract_id);
         
         let schedule_id = vesting_client.create_schedule(
@@ -449,7 +449,7 @@ mod test {
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
         let token = create_mock_token(&env);
-        let vesting_contract_id = create_vesting_contract(&env, token, admin.clone());
+        let vesting_contract_id = create_vesting_contract(&env, token.clone(), admin.clone());
         let vesting_client = VestingContractClient::new(&env, &vesting_contract_id);
         
         // Mint tokens to vesting contract
@@ -483,7 +483,7 @@ mod test {
         let admin = Address::generate(&env);
         let beneficiary = Address::generate(&env);
         let token = create_mock_token(&env);
-        let vesting_contract_id = create_vesting_contract(&env, token, admin.clone());
+        let vesting_contract_id = create_vesting_contract(&env, token.clone(), admin.clone());
         let vesting_client = VestingContractClient::new(&env, &vesting_contract_id);
         
         // Mint tokens to vesting contract
@@ -535,95 +535,52 @@ mod test {
         // Try to claim before cliff
         vesting_client.claim(&schedule_id);
     }
-}
 
-// Mock token for testing
-#[contract]
-pub struct MockToken;
+    // Mock token for testing
+    #[contract]
+    pub struct MockToken;
 
-#[contractimpl]
-impl MockToken {
-    pub fn initialize(env: Env, admin: Address) {
-        if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("Already initialized");
-        }
-        env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().set(&DataKey::TotalSupply, &0i128);
-    }
-
-    pub fn mint(env: Env, to: Address, amount: i128) {
-        let admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
-        admin.require_auth();
-
-        let total_supply: i128 = env.storage().persistent().get(&DataKey::TotalSupply).unwrap_or(0);
-        let new_total_supply = total_supply.checked_add(amount).expect("Overflow");
-
-        let balance = Self::balance(env.clone(), to.clone());
-        env.storage().persistent().set(&DataKey::Balance(to.clone()), &(balance + amount));
-        env.storage().persistent().set(&DataKey::TotalSupply, &new_total_supply);
-    }
-
-    pub fn balance(env: Env, id: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(id))
-            .unwrap_or(0)
-    }
-
-    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        from.require_auth();
-
-        let from_balance = Self::balance(env.clone(), from.clone());
-        if from_balance < amount {
-            panic!("Insufficient balance");
+    #[contractimpl]
+    impl MockToken {
+        pub fn initialize(env: Env, admin: Address) {
+            if env.storage().persistent().has(&DataKey::Admin) {
+                panic!("Already initialized");
+            }
+            env.storage().persistent().set(&DataKey::Admin, &admin);
+            env.storage().persistent().set(&DataKey::TotalSupply, &0i128);
         }
 
-        let to_balance = Self::balance(env.clone(), to.clone());
+        pub fn mint(env: Env, to: Address, amount: i128) {
+            let admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
+            admin.require_auth();
 
-        env.storage().persistent().set(&DataKey::Balance(from.clone()), &(from_balance - amount));
-        env.storage().persistent().set(&DataKey::Balance(to.clone()), &(to_balance + amount));
-    }
-}
+            let total_supply: i128 = env.storage().persistent().get(&DataKey::TotalSupply).unwrap_or(0);
+            let new_total_supply = total_supply.checked_add(amount).expect("Overflow");
 
-#[contractimpl]
-impl TokenInterface for MockToken {
-    fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 {
-        0
-    }
-
-    fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) {
-        panic!("Not implemented");
+            let bal = env.storage().persistent().get(&DataKey::Balance(to.clone())).unwrap_or(0);
+            env.storage().persistent().set(&DataKey::Balance(to.clone()), &(bal + amount));
+            env.storage().persistent().set(&DataKey::TotalSupply, &new_total_supply);
+        }
     }
 
-    fn balance(env: Env, id: Address) -> i128 {
-        Self::balance(env, id)
-    }
-
-    fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        Self::transfer(env, from, to, amount);
-    }
-
-    fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) {
-        panic!("Not implemented");
-    }
-
-    fn burn(_env: Env, _from: Address, _amount: i128) {
-        panic!("Not implemented");
-    }
-
-    fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) {
-        panic!("Not implemented");
-    }
-
-    fn decimals(_env: Env) -> u32 {
-        7
-    }
-
-    fn name(_env: Env) -> String {
-        String::from_str(&_env, "Mock Token")
-    }
-
-    fn symbol(_env: Env) -> String {
-        String::from_str(&_env, "MOCK")
+    #[contractimpl]
+    impl TokenInterface for MockToken {
+        fn allowance(_env: Env, _from: Address, _spender: Address) -> i128 { 0 }
+        fn approve(_env: Env, _from: Address, _spender: Address, _amount: i128, _expiration_ledger: u32) { panic!("Not implemented"); }
+        fn balance(env: Env, id: Address) -> i128 { env.storage().persistent().get(&DataKey::Balance(id)).unwrap_or(0) }
+        fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let from_bal = env.storage().persistent().get(&DataKey::Balance(from.clone())).unwrap_or(0);
+            if from_bal < amount { panic!("Insufficient balance"); }
+            let to_bal = env.storage().persistent().get(&DataKey::Balance(to.clone())).unwrap_or(0);
+            env.storage().persistent().set(&DataKey::Balance(from), &(from_bal - amount));
+            env.storage().persistent().set(&DataKey::Balance(to), &(to_bal + amount));
+        }
+        fn transfer_from(_env: Env, _spender: Address, _from: Address, _to: Address, _amount: i128) { panic!("Not implemented"); }
+        fn burn(_env: Env, _from: Address, _amount: i128) { panic!("Not implemented"); }
+        fn burn_from(_env: Env, _spender: Address, _from: Address, _amount: i128) { panic!("Not implemented"); }
+        fn decimals(_env: Env) -> u32 { 7 }
+        fn name(_env: Env) -> String { String::from_str(&_env, "Mock Token") }
+        fn symbol(_env: Env) -> String { String::from_str(&_env, "MOCK") }
     }
 }

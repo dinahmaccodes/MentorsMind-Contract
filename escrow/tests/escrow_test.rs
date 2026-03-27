@@ -266,7 +266,7 @@ fn test_query_by_mentor_pagination() {
     // Create 5 escrows for the same mentor
     for i in 0..5 {
         let session_id = Symbol::new(&f.env, &format!("S{}", i));
-        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0, &1);
     }
     
     // Page 0, size 2 -> should return 2 escrows (ids 1, 2)
@@ -303,7 +303,7 @@ fn test_query_by_learner_pagination() {
     // Create 3 escrows for the same learner
     for i in 0..3 {
         let session_id = Symbol::new(&f.env, &format!("L{}", i));
-        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0);
+        f.client().create_escrow(&mentor, &learner, &1_000, &session_id, &f.token_address, &0, &1);
     }
     
     // Page 0, size 2 -> 2 escrows
@@ -350,7 +350,7 @@ fn test_page_size_cap() {
     // Create 60 escrows
     for i in 0..60 {
         let session_id = Symbol::new(&f.env, &format!("S{}", i));
-        f.client().create_escrow(&mentor, &learner, &100, &session_id, &f.token_address, &0);
+        f.client().create_escrow(&mentor, &learner, &100, &session_id, &f.token_address, &0, &1);
     }
     
     // Try to get 100 per page, should be capped at 50
