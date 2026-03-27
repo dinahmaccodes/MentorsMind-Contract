@@ -320,16 +320,7 @@ fn test_upgrade_path_preserves_storage_and_enables_new_features() {
     let v2 = EscrowV2Client::new(&env, &fixed_id);
     assert_eq!(v2.get_auto_release_delay(), 72 * 60 * 60);
     let token_client = TokenClient::new(&env, &token_address);
-    let params = EscrowParamsV2 {
-        mentor: mentor.clone(),
-        learner: learner.clone(),
-        amount: 1_000,
-        session_id: symbol_short!("S3"),
-        token_address: token_address.clone(),
-        session_end_time: now,
-        total_sessions: 1,
-    };
-    let eid_new = v2.create_escrow(&params);
+    let eid_new = v2.create_escrow(&mentor, &learner, &1_000, &symbol_short!("S3"), &token_address, &now, &1u32);
     let before_mentor = token_client.balance(&mentor);
     let before_treasury = token_client.balance(&treasury);
     v2.release_funds(&learner, &eid_new);
