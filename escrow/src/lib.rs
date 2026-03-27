@@ -17,6 +17,40 @@ pub enum EscrowStatus {
     Resolved,
 }
 
+use shared::StateMachine;
+
+impl StateMachine for EscrowStatus {
+    type State = Self;
+    fn is_valid_transition(_env: &Env, from: &Self::State, to: &Self::State) -> bool {
+        matches!(
+            (from, to),
+            (EscrowStatus::Active, EscrowStatus::Released)
+                | (EscrowStatus::Active, EscrowStatus::Disputed)
+                | (EscrowStatus::Active, EscrowStatus::Refunded)
+                | (EscrowStatus::Disputed, EscrowStatus::Resolved)
+                | (EscrowStatus::Disputed, EscrowStatus::Refunded)
+        )
+    }
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Admin,
+    Treasury,
+    FeeBps,
+    AutoRelDelay,
+    EscrowCount,
+    MilestoneEscrowCount,
+    Escrow(u64),
+    MilestoneEscrow(u64),
+    ApprovedToken(Address),
+    MentorEscrows(Address),
+    LearnerEscrows(Address),
+    StatusEscrows(EscrowStatus),
+    Session(Symbol),
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MilestoneStatus {
@@ -143,52 +177,24 @@ pub struct EscrowCreatedEventData {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowParams {
+    pub mentor: Address,
+    pub learner: Address,
+    pub amount: i128,
+    pub session_id: Symbol,
+    pub token_address: Address,
+    pub session_end_time: u64,
+    pub total_sessions: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowReleasedEventData {
     pub mentor: Address,
     pub amount: i128,
     pub net_amount: i128,
     pub platform_fee: i128,
     pub token_address: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EscrowAutoReleasedEventData {
-    pub time: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DisputeOpenedEventData {
-    pub caller: Address,
-    pub reason: Symbol,
-    pub token_address: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DisputeResolvedEventData {
-    pub mentor_pct: u32,
-    pub mentor_amount: i128,
-    pub learner_amount: i128,
-    pub token_address: Address,
-    pub time: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EscrowRefundedEventData {
-    pub learner: Address,
-    pub amount: i128,
-    pub token_address: Address,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReviewSubmittedEventData {
-    pub caller: Address,
-    pub reason: Symbol,
-    pub mentor: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +238,7 @@ impl EscrowContract {
             panic!("Already initialized");
         }
         if fee_bps > MAX_FEE_BPS {
-            panic!("Fee exceeds maximum (1000 bps)");
+            panic!("Fee > 1000 bps");
         }
 
         env.storage().persistent().set(&ADMIN, &admin);
@@ -287,7 +293,7 @@ impl EscrowContract {
             .extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
         admin.require_auth();
         if new_fee_bps > MAX_FEE_BPS {
-            panic!("Fee exceeds maximum (1000 bps)");
+            panic!("Fee > 1000 bps");
         }
         env.storage().persistent().set(&FEE_BPS, &new_fee_bps);
         env.storage()
@@ -446,6 +452,8 @@ impl EscrowContract {
         if escrow.status != EscrowStatus::Active {
             panic!("Escrow not active");
         }
+        Self::_do_release(&env, &mut e, &key);
+    }
 
         let admin: Address = env.storage().persistent().get(&ADMIN).expect("Admin not found");
         env.storage()
@@ -467,9 +475,10 @@ impl EscrowContract {
             .persistent()
             .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
-        let mut escrow: Escrow = env.storage().persistent().get(&key).expect("Escrow not found");
-
-        if escrow.status != EscrowStatus::Active {
+    pub fn release_partial(env: Env, caller: Address, escrow_id: u64) {
+        let key = DataKey::Escrow(escrow_id);
+        let mut e: Escrow = env.storage().persistent().get(&key).expect("Not found");
+        if e.status != EscrowStatus::Active {
             panic!("Escrow not active");
         }
         if escrow.sessions_completed >= escrow.total_sessions {
@@ -482,8 +491,8 @@ impl EscrowContract {
             .extend_ttl(&ADMIN, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
 
         caller.require_auth();
-        if caller != escrow.learner && caller != admin {
-            panic!("Caller not authorized");
+        if caller != e.learner && caller != admin {
+            panic!("Not authorized");
         }
 
         let amount_to_release = if escrow.sessions_completed + 1 == escrow.total_sessions {
@@ -536,8 +545,8 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
 
         env.events().publish(
-            (symbol_short!("partial"), escrow.id),
-            (escrow.sessions_completed, amount_to_release),
+            (symbol_short!("partial"), escrow_id),
+            (e.sessions_completed, amt),
         );
     }
 
@@ -578,15 +587,8 @@ impl EscrowContract {
         if escrow.status != EscrowStatus::Active {
             panic!("Escrow not active");
         }
-
-        let now = env.ledger().timestamp();
-        let release_after = escrow
-            .session_end_time
-            .checked_add(escrow.auto_release_delay)
-            .expect("Timestamp overflow");
-
-        if now < release_after {
-            panic!("Auto-release window has not elapsed");
+        if env.ledger().timestamp() < e.session_end_time + e.auto_release_delay {
+            panic!("Window not elapsed");
         }
 
         env.events().publish(
@@ -615,14 +617,14 @@ impl EscrowContract {
         }
 
         caller.require_auth();
-        if caller != escrow.mentor && caller != escrow.learner {
-            panic!("Caller not authorized to dispute");
+        if caller != e.mentor && caller != e.learner {
+            panic!("Unauthorized");
         }
-
-        escrow.status = EscrowStatus::Disputed;
-        escrow.dispute_reason = reason.clone();
-        env.storage().persistent().set(&key, &escrow);
-
+        let old_status = e.status.clone();
+        e.status = EscrowStatus::Disputed;
+        e.dispute_reason = reason.clone();
+        env.storage().persistent().set(&key, &e);
+        Self::_update_status_index(&env, e.id, &old_status, &EscrowStatus::Disputed);
         env.events().publish(
             (
                 symbol_short!("Escrow"),
@@ -755,6 +757,10 @@ impl EscrowContract {
                 token_address: escrow.token_address,
             },
         );
+        e.status = EscrowStatus::Refunded;
+        e.amount = 0;
+        env.storage().persistent().set(&key, &e);
+        Self::_update_status_index(&env, e.id, &old_status, &EscrowStatus::Refunded);
     }
 
     pub fn submit_review(env: Env, caller: Address, escrow_id: u64, reason: Symbol) {
@@ -1225,6 +1231,7 @@ impl EscrowContract {
             (symbol_short!("ms_cmp"), escrow_id),
             (milestone_index, milestone.amount, net_amount),
         );
+        count
     }
 
     pub fn dispute_milestone(env: Env, escrow_id: u64, milestone_index: u32, reason: Symbol) {
@@ -1282,11 +1289,15 @@ impl EscrowContract {
         let key = (MESCROW_SYM, escrow_id);
         env.storage()
             .persistent()
-            .extend_ttl(&key, ESCROW_TTL_THRESHOLD, ESCROW_TTL_BUMP);
+            .set(&DataKey::StatusEscrows(to.clone()), &t_vec);
+    }
+
+    fn _set_token_approved(env: &Env, tok: &Address, approved: bool) {
+        let key = DataKey::ApprovedToken(tok.clone());
+        env.storage().persistent().set(&key, &approved);
         env.storage()
             .persistent()
-            .get(&key)
-            .expect("Milestone escrow not found")
+            .extend_ttl(&key, EXTEND_TTL_THRESHOLD, EXTEND_TTL_BUMP);
     }
 
     pub fn get_milestone_escrow_count(env: Env) -> u64 {

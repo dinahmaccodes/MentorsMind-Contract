@@ -6,9 +6,7 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     IntoVal,
 };
-use mentorminds_escrow::{
-    Escrow, EscrowContract, EscrowContractClient, EscrowStatus,
-};
+use mentorminds_escrow::{Escrow, EscrowContract, EscrowContractClient, EscrowParams, EscrowStatus};
 
 // ============================================================================
 // Benchmark Infrastructure

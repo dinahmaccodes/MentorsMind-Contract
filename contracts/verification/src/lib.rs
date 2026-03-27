@@ -2,6 +2,14 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Admin,
+    Verification(Address),
+    Tier(Address),
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct VerificationRecord {
     pub credential_hash: BytesN<32>,
@@ -112,11 +120,8 @@ impl VerificationContract {
             .expect("Not initialized");
         admin.require_auth();
         let key = DataKey::Verification(mentor.clone());
-        let mut rec: VerificationRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .expect("Not verified");
+        let mut rec: VerificationRecord =
+            env.storage().persistent().get(&key).expect("Not verified");
         rec.is_active = false;
         env.storage().persistent().set(&key, &rec);
         env.events().publish(
@@ -136,10 +141,7 @@ impl VerificationContract {
 
     pub fn get_verification(env: Env, mentor: Address) -> VerificationRecord {
         let key = DataKey::Verification(mentor);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .expect("Not verified")
+        env.storage().persistent().get(&key).expect("Not verified")
     }
 }
 

@@ -13,10 +13,10 @@ use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, BytesN, Env, TryFromVal, Vec,
+    Address, BytesN, Env, Symbol, TryFromVal, Vec,
 };
 
-use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowStatus};
+use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowParams, EscrowStatus};
 use mentorminds_verification::{VerificationContract, VerificationContractClient};
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,9 @@ use mentorminds_verification::{VerificationContract, VerificationContractClient}
 
 /// Registers a Stellar Asset Contract and returns its address + SAC client.
 fn create_token<'a>(env: &'a Env, admin: &Address) -> (Address, StellarAssetClient<'a>) {
-    let addr = env.register_stellar_asset_contract(admin.clone());
+    let addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     (addr.clone(), StellarAssetClient::new(env, &addr))
 }
 
