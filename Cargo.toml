@@ -9,6 +9,7 @@ members = [
     "contracts/timelock",
     "contracts/vesting",
     "contracts/payment_router",
+    "contracts/snapshot",
     "contracts/streak_rewards",
     "contracts/shared",
     "contracts/regulatory_reporting",
