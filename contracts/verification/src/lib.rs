@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,18 +30,6 @@ pub struct MentorVerifiedEventData {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationRevokedEventData {
     pub revoked: bool,
-}
-
-const ADMIN: Symbol = symbol_short!("ADMIN");
-const VER_KEY: Symbol = symbol_short!("VER");
-const TIER_KEY: Symbol = symbol_short!("TIER");
-
-#[contracttype]
-#[derive(Clone)]
-pub enum DataKey {
-    Admin,
-    Verification(Address),
-    Tier(Address),
 }
 
 #[contract]

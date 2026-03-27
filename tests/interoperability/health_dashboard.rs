@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::interoperability::mocks::{MockHealthDashboard, MockHealthDashboardClient};
-    use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowParams};
+    use mentorminds_escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Vec};
 
     #[test]
@@ -34,27 +34,25 @@ mod tests {
         // 5. Create some escrows
         let token_client = crate::interoperability::mocks::MockTokenClient::new(&env, &token_id);
         token_client.mint(&learner, &1000);
-        let params = mentorminds_escrow::EscrowParams {
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount: 100,
-            session_id: symbol_short!("S1"),
-            token_address: token_id.clone(),
-            session_end_time: env.ledger().timestamp() + 3600,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &100,
+            &symbol_short!("S1"),
+            &token_id,
+            &(env.ledger().timestamp() + 3600),
+            &1u32,
+        );
 
-        let params2 = EscrowParams {
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount: 200,
-            session_id: symbol_short!("S2"),
-            token_address: token_id.clone(),
-            session_end_time: env.ledger().timestamp() + 3600,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params2);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &200,
+            &symbol_short!("S2"),
+            &token_id,
+            &(env.ledger().timestamp() + 3600),
+            &1u32,
+        );
 
         // 6. Verify aggregation
         assert_eq!(dash_client.get_summary(&escrow_id), 2);

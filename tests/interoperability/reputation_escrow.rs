@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::interoperability::mocks::MockTokenClient;
-    use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowParams};
+    use mentorminds_escrow::{EscrowContract, EscrowContractClient};
     use mentorminds_reputation::{ReputationContract, ReputationContractClient};
     use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Vec};
 
@@ -33,16 +33,15 @@ mod tests {
         reput_client.initialize(&admin, &escrow_id);
 
         // 4. Create Escrow session
-        let params = EscrowParams {
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount: 100,
-            session_id: symbol_short!("S1"),
-            token_address: token_id.clone(),
-            session_end_time: env.ledger().timestamp() + 3600,
-            total_sessions: 1,
-        };
-        let escrow_index = escrow_client.create_escrow(&params);
+        let escrow_index = escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &100,
+            &symbol_short!("S1"),
+            &token_id,
+            &(env.ledger().timestamp() + 3600),
+            &1u32,
+        );
 
         // 6. Release Escrow
         escrow_client.release_funds(&learner, &escrow_index);
@@ -55,16 +54,15 @@ mod tests {
 
         // 9. Multiple reviews
         token_client.mint(&learner, &1000);
-        let params2 = EscrowParams {
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount: 100,
-            session_id: symbol_short!("S2"),
-            token_address: token_id.clone(),
-            session_end_time: env.ledger().timestamp() + 3600,
-            total_sessions: 1,
-        };
-        let escrow_index2 = escrow_client.create_escrow(&params2);
+        let escrow_index2 = escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &100,
+            &symbol_short!("S2"),
+            &token_id,
+            &(env.ledger().timestamp() + 3600),
+            &1u32,
+        );
         escrow_client.release_funds(&learner, &escrow_index2);
 
         reput_client.add_review(&learner, &escrow_index2, &1);

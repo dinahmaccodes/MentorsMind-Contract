@@ -3,7 +3,7 @@ mod tests {
     use crate::interoperability::mocks::{
         MockKYCRegistryClient, MockSanctionsClient, MockTokenClient, MockVelocityLimitsClient,
     };
-    use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowParams};
+    use mentorminds_escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Vec};
 
     fn setup_env<'a>(
@@ -65,16 +65,15 @@ mod tests {
         kyc_client.set_kyc(&learner, &false);
         token_client.mint(&learner, &1000);
 
-        let params = EscrowParams {
-            mentor,
-            learner,
-            amount: 1000,
-            session_id: symbol_short!("S1"),
-            token_address: token_client.address.clone(),
-            session_end_time: 0,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &1000,
+            &symbol_short!("S1"),
+            &token_client.address.clone(),
+            &0u64,
+            &1u32,
+        );
     }
 
     #[test]
@@ -89,16 +88,15 @@ mod tests {
         sanc_client.set_sanctioned(&learner, &true);
         token_client.mint(&learner, &1000);
 
-        let params = EscrowParams {
-            mentor,
-            learner,
-            amount: 1000,
-            session_id: symbol_short!("S2"),
-            token_address: token_client.address.clone(),
-            session_end_time: 0,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &1000,
+            &symbol_short!("S2"),
+            &token_client.address.clone(),
+            &0u64,
+            &1u32,
+        );
     }
 
     #[test]
@@ -115,16 +113,15 @@ mod tests {
         vel_client.set_fail(&true);
         token_client.mint(&learner, &1000);
 
-        let params = EscrowParams {
-            mentor,
-            learner,
-            amount: 1000,
-            session_id: symbol_short!("S3"),
-            token_address: token_client.address.clone(),
-            session_end_time: 0,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &1000,
+            &symbol_short!("S3"),
+            &token_client.address.clone(),
+            &0u64,
+            &1u32,
+        );
     }
 
     #[test]
@@ -140,16 +137,15 @@ mod tests {
         vel_client.set_fail(&false);
         token_client.mint(&learner, &1000);
 
-        let params = EscrowParams {
-            mentor,
-            learner,
-            amount: 1000,
-            session_id: symbol_short!("S4"),
-            token_address: token_client.address.clone(),
-            session_end_time: 0,
-            total_sessions: 1,
-        };
-        escrow_client.create_escrow(&params);
+        escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &1000,
+            &symbol_short!("S4"),
+            &token_client.address.clone(),
+            &0u64,
+            &1u32,
+        );
 
         assert_eq!(token_client.balance(&escrow_client.address), 1000);
     }

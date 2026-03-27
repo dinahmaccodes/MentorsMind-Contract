@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::interoperability::mocks::MockTokenClient;
-    use mentorminds_escrow::{EscrowContract, EscrowContractClient, EscrowParams};
+    use mentorminds_escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Vec};
 
     #[test]
@@ -32,17 +32,15 @@ mod tests {
         assert_eq!(token_client.balance(&learner), 1000);
 
         // 5. Create Escrow (Transfer learner -> escrow)
-        let params = EscrowParams {
-            mentor: mentor.clone(),
-            learner: learner.clone(),
-            amount: 1000,
-            session_id: symbol_short!("S1"),
-            token_address: token_id.clone(),
-            session_end_time: env.ledger().timestamp() + 3600,
-            total_sessions: 1,
-        };
-
-        let est_id = escrow_client.create_escrow(&params);
+        let est_id = escrow_client.create_escrow(
+            &mentor,
+            &learner,
+            &1000,
+            &symbol_short!("S1"),
+            &token_id,
+            &(env.ledger().timestamp() + 3600),
+            &1u32,
+        );
 
         // Verify balance moved to escrow
         assert_eq!(token_client.balance(&learner), 0);

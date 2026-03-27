@@ -239,20 +239,29 @@ impl EscrowContract {
             .set(&DataKey::VelocityLimits, &velocity);
     }
 
-    pub fn create_escrow(env: Env, params: EscrowParams) -> u64 {
+    pub fn create_escrow(
+        env: Env,
+        mentor: Address,
+        learner: Address,
+        amount: i128,
+        session_id: Symbol,
+        token_address: Address,
+        session_end_time: u64,
+        total_sessions: u32,
+    ) -> u64 {
         Self::_create_escrow_internal(
             &env,
-            params.mentor,
-            params.learner,
-            params.amount,
-            params.session_id,
-            params.token_address.clone(),
-            params.session_end_time,
+            mentor,
+            learner,
+            amount,
+            session_id,
+            token_address.clone(),
+            session_end_time,
             0,
-            params.amount,
-            params.token_address.clone(),
-            params.token_address,
-            params.total_sessions,
+            amount,
+            token_address.clone(),
+            token_address,
+            total_sessions,
         )
     }
 
