@@ -11,6 +11,10 @@ members = [
     "contracts/payment_router",
     "contracts/streak_rewards",
     "contracts/shared",
+    "contracts/mnt-token",
+    "contracts/session_nft",
+    "contracts/staking",
+    "contracts/reputation",
     "tests",
 ]
 

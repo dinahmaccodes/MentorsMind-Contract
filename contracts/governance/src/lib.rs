@@ -3,7 +3,7 @@
 use shared::StateMachine;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal,
-    Symbol,
+    Symbol, Vec,
 };
 
 const ADMIN: Symbol = symbol_short!("ADMIN");
@@ -24,6 +24,7 @@ pub enum ProposalAction {
     UpdateAutoRelease(u64),
     AddAsset(Address),
     UpdateAdmin(Address),
+    ExecuteCall(Address, Symbol, Vec<u64>),
 }
 
 #[contracttype]
@@ -74,6 +75,7 @@ pub enum DataKey {
     Vote(u32, Address),
     VoteWeight(u32, Address),
     ApprovedAsset(Address),
+    Timelock,
 }
 
 #[contract]
@@ -107,6 +109,12 @@ impl GovernanceContract {
         env.storage().persistent().set(&VOTING_PERIOD_SECS, &period);
         env.storage().persistent().set(&QUORUM_BPS, &quorum);
         env.storage().persistent().set(&PROPOSAL_COUNT, &0u32);
+    }
+
+    pub fn set_timelock(env: Env, timelock: Address) {
+        let admin: Address = env.storage().persistent().get(&ADMIN).unwrap();
+        admin.require_auth();
+        env.storage().persistent().set(&DataKey::Timelock, &timelock);
     }
 
     pub fn create_proposal(
@@ -367,6 +375,13 @@ impl GovernanceContract {
             }
             ProposalAction::UpdateAdmin(new_admin) => {
                 env.storage().persistent().set(&ADMIN, new_admin);
+            }
+            ProposalAction::ExecuteCall(target, function, args) => {
+                let mut val_args = vec![env];
+                for arg in args.iter() {
+                    val_args.push_back(soroban_sdk::Val::from_payload(arg));
+                }
+                env.invoke_contract::<soroban_sdk::Val>(target, function, val_args);
             }
         }
     }

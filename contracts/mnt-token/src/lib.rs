@@ -302,7 +302,7 @@ impl TokenInterface for MNTToken {
 
         env.events().publish(
             (Symbol::new(&env, "MNTToken"), Symbol::new(&env, "Transfer"), from.clone()),
-            TransferEventData { to, amount },
+            TransferEventData { to: to.clone(), amount },
         );
         env.events()
             .publish((symbol_short!("transfer"), from, to), amount);

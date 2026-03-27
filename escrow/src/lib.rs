@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, IntoVal, Symbol,
+    Vec,
 };
 
 #[contracttype]
@@ -45,6 +46,9 @@ pub enum DataKey {
     LearnerEscrows(Address),
     StatusEscrows(EscrowStatus),
     Session(Symbol),
+    KycRegistry,
+    SanctionsRegistry,
+    VelocityLimits,
 }
 
 #[contracttype]
@@ -217,6 +221,18 @@ impl EscrowContract {
             .expect("Init required");
         admin.require_auth();
         Self::_set_token_approved(&env, &token_address, approved);
+    }
+
+    pub fn set_compliance_contracts(env: Env, kyc: Address, sanctions: Address, velocity: Address) {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .expect("Init required");
+        admin.require_auth();
+        env.storage().persistent().set(&DataKey::KycRegistry, &kyc);
+        env.storage().persistent().set(&DataKey::SanctionsRegistry, &sanctions);
+        env.storage().persistent().set(&DataKey::VelocityLimits, &velocity);
     }
 
     pub fn create_escrow(env: Env, params: EscrowParams) -> u64 {
@@ -603,6 +619,21 @@ impl EscrowContract {
         {
             panic!("Duplicate session_id");
         }
+
+        // --- COMPLIANCE CHECKS ---
+        if let Some(kyc_addr) = env.storage().persistent().get::<_, Address>(&DataKey::KycRegistry) {
+            let is_approved: bool = env.invoke_contract(&kyc_addr, &symbol_short!("is_kyc"), (learner.clone(),).into_val(env));
+            if !is_approved { panic!("KYC required"); }
+        }
+        if let Some(sanc_addr) = env.storage().persistent().get::<_, Address>(&DataKey::SanctionsRegistry) {
+            let is_sanctioned: bool = env.invoke_contract(&sanc_addr, &Symbol::new(env, "is_sanctioned"), (learner.clone(),).into_val(env));
+            if is_sanctioned { panic!("Sanctioned"); }
+        }
+        if let Some(vel_addr) = env.storage().persistent().get::<_, Address>(&DataKey::VelocityLimits) {
+            let ok: bool = env.invoke_contract(&vel_addr, &Symbol::new(env, "check_and_record"), (learner.clone(), amount).into_val(env));
+            if !ok { panic!("Velocity limit exceeded"); }
+        }
+        // -------------------------
         learner.require_auth();
         token::Client::new(env, &token_address).transfer(
             &learner,
