@@ -64,7 +64,7 @@ impl RecurringAllowanceContract {
         env.storage().persistent().set(&key, &record);
 
         env.events().publish(
-            (symbol_short!("allowance"), symbol_short!("authorized"), owner),
+            (symbol_short!("allowance"), Symbol::new(&env, "authorized"), owner),
             (spender, token, amount_per_period, max_periods, period_seconds),
         );
     }
@@ -124,7 +124,7 @@ impl RecurringAllowanceContract {
         env.storage().persistent().set(&key, &record);
 
         env.events().publish(
-            (symbol_short!("allowance"), symbol_short!("payment_pulled"), owner),
+            (symbol_short!("allowance"), Symbol::new(&env, "payment_pulled"), owner),
             (spender, token, amount, record.periods_used),
         );
     }

@@ -222,7 +222,7 @@ impl VestingContract {
         let admin: Address = env.storage().persistent().get(&DataKey::Admin).expect("Not initialized");
         admin.require_auth();
 
-        let mut schedule: VestingSchedule = env.storage().persistent()
+        let schedule: VestingSchedule = env.storage().persistent()
             .get(&DataKey::Schedule(schedule_id))
             .expect("Schedule not found");
 
