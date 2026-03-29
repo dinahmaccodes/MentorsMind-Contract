@@ -85,7 +85,8 @@ impl EndorsementsContract {
             panic!("no completed shared session");
         }
 
-        let endorsement_key = DataKey::Endorsement(endorser.clone(), endorsee.clone(), skill.clone());
+        let endorsement_key =
+            DataKey::Endorsement(endorser.clone(), endorsee.clone(), skill.clone());
         if env.storage().persistent().has(&endorsement_key) {
             panic!("endorsement already exists");
         }
@@ -117,16 +118,15 @@ impl EndorsementsContract {
             env.storage().persistent().set(&skills_key, &skills);
         }
 
-        env.events().publish(
-            (Symbol::new(&env, "endorsed"), endorsee, skill),
-            endorser,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "endorsed"), endorsee, skill), endorser);
     }
 
     pub fn remove_endorsement(env: Env, endorser: Address, endorsee: Address, skill: Symbol) {
         endorser.require_auth();
 
-        let endorsement_key = DataKey::Endorsement(endorser.clone(), endorsee.clone(), skill.clone());
+        let endorsement_key =
+            DataKey::Endorsement(endorser.clone(), endorsee.clone(), skill.clone());
         if !env.storage().persistent().has(&endorsement_key) {
             panic!("endorsement not found");
         }
@@ -176,7 +176,9 @@ impl EndorsementsContract {
                 env.storage().persistent().set(&skills_key, &next_skills);
             }
         } else {
-            env.storage().persistent().set(&count_key, &(current_count - 1));
+            env.storage()
+                .persistent()
+                .set(&count_key, &(current_count - 1));
         }
 
         env.events().publish(
@@ -298,7 +300,9 @@ mod tests {
             let mut learner_sessions: Vec<Symbol> = env
                 .storage()
                 .persistent()
-                .get(&MockSessionDataKey::LearnerSessions(session.learner.clone()))
+                .get(&MockSessionDataKey::LearnerSessions(
+                    session.learner.clone(),
+                ))
                 .unwrap_or(Vec::new(&env));
             learner_sessions.push_back(sid);
             env.storage().persistent().set(
@@ -394,18 +398,13 @@ mod tests {
         f.add_completed_shared_session();
 
         let skill = symbol_short!("RUST");
-        f.endorsements()
-            .endorse(&f.endorser, &f.endorsee, &skill);
+        f.endorsements().endorse(&f.endorser, &f.endorsee, &skill);
 
         assert_eq!(
-            f.endorsements()
-                .get_endorsement_count(&f.endorsee, &skill),
+            f.endorsements().get_endorsement_count(&f.endorsee, &skill),
             1
         );
-        assert_eq!(
-            f.endorsements().get_endorsers(&f.endorsee, &skill).len(),
-            1
-        );
+        assert_eq!(f.endorsements().get_endorsers(&f.endorsee, &skill).len(), 1);
     }
 
     #[test]
@@ -414,8 +413,7 @@ mod tests {
         f.add_completed_shared_session();
 
         let skill = symbol_short!("SOLID");
-        f.endorsements()
-            .endorse(&f.endorser, &f.endorsee, &skill);
+        f.endorsements().endorse(&f.endorser, &f.endorsee, &skill);
 
         let skills = f.endorsements().get_endorsed_skills(&f.endorsee);
         assert_eq!(skills.len(), 1);
@@ -430,21 +428,16 @@ mod tests {
         f.add_completed_shared_session();
 
         let skill = symbol_short!("RUST");
-        f.endorsements()
-            .endorse(&f.endorser, &f.endorsee, &skill);
+        f.endorsements().endorse(&f.endorser, &f.endorsee, &skill);
 
         f.endorsements()
             .remove_endorsement(&f.endorser, &f.endorsee, &skill);
 
         assert_eq!(
-            f.endorsements()
-                .get_endorsement_count(&f.endorsee, &skill),
+            f.endorsements().get_endorsement_count(&f.endorsee, &skill),
             0
         );
-        assert_eq!(
-            f.endorsements().get_endorsers(&f.endorsee, &skill).len(),
-            0
-        );
+        assert_eq!(f.endorsements().get_endorsers(&f.endorsee, &skill).len(), 0);
     }
 
     #[test]
