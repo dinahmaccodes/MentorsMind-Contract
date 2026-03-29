@@ -1,5 +1,13 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env};
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Admin,
+    Verification(Address),
+    Tier(Address),
+}
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -23,10 +31,6 @@ pub struct MentorVerifiedEventData {
 pub struct VerificationRevokedEventData {
     pub revoked: bool,
 }
-
-const ADMIN: Symbol = symbol_short!("ADMIN");
-const VER_KEY: Symbol = symbol_short!("VER");
-const TIER_KEY: Symbol = symbol_short!("TIER");
 
 #[contract]
 pub struct VerificationContract;
@@ -77,7 +81,11 @@ impl VerificationContract {
             env.storage().persistent().set(&tkey, &0i32);
         }
         env.events().publish(
-            (Symbol::new(&env, "Verification"), Symbol::new(&env, "Verified"), mentor.clone()),
+            (
+                symbol_short!("Verify"),
+                symbol_short!("VrfyOk"),
+                mentor.clone(),
+            ),
             MentorVerifiedEventData {
                 credential_hash: rec.credential_hash.clone(),
                 verified_at: rec.verified_at,
@@ -104,15 +112,16 @@ impl VerificationContract {
             .expect("Not initialized");
         admin.require_auth();
         let key = DataKey::Verification(mentor.clone());
-        let mut rec: VerificationRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .expect("Not verified");
+        let mut rec: VerificationRecord =
+            env.storage().persistent().get(&key).expect("Not verified");
         rec.is_active = false;
         env.storage().persistent().set(&key, &rec);
         env.events().publish(
-            (Symbol::new(&env, "Verification"), Symbol::new(&env, "Revoked"), mentor.clone()),
+            (
+                symbol_short!("Verify"),
+                symbol_short!("Revoke"),
+                mentor.clone(),
+            ),
             VerificationRevokedEventData { revoked: true },
         );
     }
@@ -128,10 +137,7 @@ impl VerificationContract {
 
     pub fn get_verification(env: Env, mentor: Address) -> VerificationRecord {
         let key = DataKey::Verification(mentor);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .expect("Not verified")
+        env.storage().persistent().get(&key).expect("Not verified")
     }
 }
 

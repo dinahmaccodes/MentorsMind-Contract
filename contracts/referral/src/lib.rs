@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, IntoVal,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, IntoVal, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,13 +90,25 @@ impl ReferralContract {
             completed: false,
         };
 
-        env.storage().persistent().set(&DataKey::Referral(referee.clone()), &info);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Referral(referee.clone()), &info);
 
-        let count: u32 = env.storage().persistent().get(&DataKey::ReferrerCount(referrer.clone())).unwrap_or(0);
-        env.storage().persistent().set(&DataKey::ReferrerCount(referrer.clone()), &(count + 1));
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReferrerCount(referrer.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReferrerCount(referrer.clone()), &(count + 1));
 
         env.events().publish(
-            (Symbol::new(&env, "Referral"), Symbol::new(&env, "Registered"), referrer.clone()),
+            (
+                Symbol::new(&env, "Referral"),
+                Symbol::new(&env, "Registered"),
+                referrer.clone(),
+            ),
             ReferralRegisteredEventData { referee, is_mentor },
         );
     }
@@ -159,16 +169,24 @@ impl ReferralContract {
             .get(&DataKey::MNTToken)
             .expect("Token not set");
 
-        // Call MNT Token to mint rewards.
-        let client = mentorminds_mnt_token::MNTTokenClient::new(&env, &mnt_token);
-        client.mint(&referrer, &pending);
+        // Call MNT token `mint(Address, i128)` without linking the token contract crate,
+        // which avoids duplicate exported symbols during wasm linking.
+        env.invoke_contract::<()>(
+            &mnt_token,
+            &Symbol::new(&env, "mint"),
+            (referrer.clone(), pending).into_val(&env),
+        );
 
         env.storage()
             .persistent()
             .set(&DataKey::PendingReward(referrer.clone()), &0i128);
 
         env.events().publish(
-            (Symbol::new(&env, "Referral"), Symbol::new(&env, "RewardClaimed"), referrer.clone()),
+            (
+                Symbol::new(&env, "Referral"),
+                Symbol::new(&env, "RewardClaimed"),
+                referrer.clone(),
+            ),
             RewardClaimedEventData { amount: pending },
         );
     }
@@ -199,10 +217,9 @@ impl ReferralContract {
 mod test {
     extern crate std;
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
-    use soroban_sdk::{IntoVal, Symbol};
     use mentorminds_mnt_token::{MNTToken, MNTTokenClient};
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::{IntoVal, Symbol, TryFromVal};
 
     struct TestFixture {
         env: Env,
@@ -263,17 +280,24 @@ mod test {
 
         let events = f.env.events().all();
         let last_event = events.last().unwrap();
-        assert_eq!(
-            last_event.0,
-            f.ref_id.clone()
-        );
+        assert_eq!(last_event.0, f.ref_id.clone());
         assert_eq!(
             last_event.1,
-            (Symbol::new(&f.env, "Referral"), Symbol::new(&f.env, "Registered"), referrer.clone()).into_val(&f.env)
+            (
+                Symbol::new(&f.env, "Referral"),
+                Symbol::new(&f.env, "Registered"),
+                referrer.clone()
+            )
+                .into_val(&f.env)
         );
+        let payload = ReferralRegisteredEventData::try_from_val(&f.env, &last_event.2)
+            .expect("registered payload should decode");
         assert_eq!(
-            last_event.2,
-            ReferralRegisteredEventData { referee: referee.clone(), is_mentor: true }.into_val(&f.env)
+            payload,
+            ReferralRegisteredEventData {
+                referee: referee.clone(),
+                is_mentor: true,
+            }
         );
 
         // Fulfill referral as admin
@@ -287,17 +311,23 @@ mod test {
 
         let events2 = f.env.events().all();
         let last_event2 = events2.last().unwrap();
-        assert_eq!(
-            last_event2.0,
-            f.ref_id.clone()
-        );
+        assert_eq!(last_event2.0, f.ref_id.clone());
         assert_eq!(
             last_event2.1,
-            (Symbol::new(&f.env, "Referral"), Symbol::new(&f.env, "RewardClaimed"), referrer.clone()).into_val(&f.env)
+            (
+                Symbol::new(&f.env, "Referral"),
+                Symbol::new(&f.env, "RewardClaimed"),
+                referrer.clone()
+            )
+                .into_val(&f.env)
         );
+        let payload2 = RewardClaimedEventData::try_from_val(&f.env, &last_event2.2)
+            .expect("reward payload should decode");
         assert_eq!(
-            last_event2.2,
-            RewardClaimedEventData { amount: REWARD_MENTOR }.into_val(&f.env)
+            payload2,
+            RewardClaimedEventData {
+                amount: REWARD_MENTOR,
+            }
         );
     }
 
