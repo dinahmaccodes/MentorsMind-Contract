@@ -1,5 +1,10 @@
-import { Server } from 'stellar-sdk';
-import { horizonConfig } from '../config/horizon.config';
+import { Server } from "stellar-sdk";
+import { horizonConfig } from "../config/horizon.config";
+import { cacheService } from "./cache.service";
+
+const CACHE_KEY = "stellar:fee_estimate";
+const CACHE_TTL_MS = 30_000; // 30s fee freshness vs Horizon load
+const FALLBACK_BASE_FEE = 100;
 
 export class StellarFeesService {
   private server: Server;
@@ -13,23 +18,50 @@ export class StellarFeesService {
    * @param operationCount Number of operations in the transaction.
    * @returns An object containing the recommended_fee as a string.
    */
-  async getFeeEstimate(operationCount: number = 1): Promise<{ recommended_fee: string }> {
-    try {
-      // Fetch fee stats from Horizon
-      const feeStats = await this.server.feeStats();
-      
-      // We use the 'mode' fee charged in recent ledgers as a reliable "recommended" fee.
-      const baseFee = parseInt(feeStats.fee_charged.mode, 10) || 100;
-      
-      const totalFee = baseFee * Math.max(operationCount, 1);
-      
+  async getFeeEstimate(
+    operationCount: number = 1,
+  ): Promise<{ recommended_fee: string }> {
+    const safeOperationCount = Math.max(operationCount, 1);
+
+    const cachedBaseFee = cacheService.get<number>(CACHE_KEY);
+
+    if (cachedBaseFee !== null) {
       return {
-        recommended_fee: totalFee.toString(),
+        recommended_fee: (cachedBaseFee * safeOperationCount).toString(),
+      };
+    }
+
+    try {
+      const feeStats = await this.server.feeStats();
+
+      const parsedFee = parseInt(feeStats.fee_charged.mode, 10);
+
+      const baseFee =
+        Number.isFinite(parsedFee) && parsedFee > 0
+          ? parsedFee
+          : FALLBACK_BASE_FEE;
+
+      if (baseFee === FALLBACK_BASE_FEE) {
+        console.warn(
+          "[StellarFeesService] Invalid fee mode received, using fallback base fee",
+        );
+      }
+
+      cacheService.set(CACHE_KEY, baseFee, CACHE_TTL_MS);
+
+      return {
+        recommended_fee: (baseFee * safeOperationCount).toString(),
       };
     } catch (error) {
-      console.warn('[StellarFeesService] Failed to fetch fee stats from Horizon, using fallback:', error);
+      console.warn(
+        "[StellarFeesService] Failed to fetch fee stats from Horizon, using fallback:",
+        error,
+      );
+
       return {
-        recommended_fee: (100 * Math.max(operationCount, 1)).toString(),
+          recommended_fee: (
+          FALLBACK_BASE_FEE * safeOperationCount
+        ).toString(),
       };
     }
   }
