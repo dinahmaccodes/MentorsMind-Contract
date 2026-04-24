@@ -1,4 +1,10 @@
 import { paymentTrackerService } from './payment-tracker.service';
+import { startRateRefresh } from './exchange-rate.service';
+import { getRedisClient } from './redis.service';
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};
 
 const HORIZON_URL = process.env.HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 const POLL_INTERVAL_MS = 10_000;
@@ -59,6 +65,9 @@ async function pollPending(): Promise<void> {
 export function startStellarMonitor(): void {
   setInterval(pollPending, POLL_INTERVAL_MS);
   console.log(`Stellar monitor started (poll every ${POLL_INTERVAL_MS / 1000}s)`);
+  
+  // Start the exchange rate refresh service with distributed lock
+  startRateRefresh();
 }
 
 export async function processWebhookEvent(payload: {
